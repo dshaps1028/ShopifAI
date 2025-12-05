@@ -30,8 +30,7 @@ const Header = ({ status, label }) =>
   h(
     'header',
     null,
-    h('p', { className: 'eyebrow' }, label ?? 'Status'),
-    h(StatusBadge, { status })
+    h('p', { className: 'eyebrow' }, label ?? 'Status')
   );
 
 const Main = ({ children }) => h('main', null, children);
@@ -142,19 +141,10 @@ function App() {
     h(
       Shell,
       null,
-      h(Header, { status, label: 'System status' }),
+      h(Header, { status, label: 'Order Management Hub' }),
       h(
         Main,
         null,
-        h(
-          Panel,
-          {
-            title: 'Welcome',
-            description:
-              'This lightweight shell is ready for your merchant tools. Wire up APIs, drop in UI components, and iterate fast.'
-          },
-          h(ActionButton, { onClick: handleAction }, 'Run quick check')
-        ),
         h(
           Panel,
           {
