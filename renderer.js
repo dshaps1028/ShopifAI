@@ -8,10 +8,10 @@ const formatLog = (message) => {
 
 const Shell = ({ children }) => h('div', { className: 'shell' }, children);
 
-const HeaderTitle = ({ title, subtitle }) =>
+const PageTitle = ({ title, subtitle }) =>
   h(
     'div',
-    null,
+    { className: 'page-title' },
     h('h1', null, title),
     h('span', null, subtitle)
   );
@@ -24,11 +24,11 @@ const StatusBadge = ({ status }) =>
     h('span', null, status)
   );
 
-const Header = ({ title, subtitle, status }) =>
+const Header = ({ status, label }) =>
   h(
     'header',
     null,
-    h(HeaderTitle, { title, subtitle }),
+    h('p', { className: 'eyebrow' }, label ?? 'Status'),
     h(StatusBadge, { status })
   );
 
@@ -63,26 +63,31 @@ function App() {
   };
 
   return h(
-    Shell,
+    React.Fragment,
     null,
-    h(Header, {
+    h(PageTitle, {
       title: 'Merchant Workbench',
-      subtitle: 'Starter Electron environment',
-      status
+      subtitle:
+        'Manage your orders, analyze your order data and learn more about Shopify all in one place'
     }),
     h(
-      Main,
+      Shell,
       null,
+      h(Header, { status, label: 'System status' }),
       h(
-        Panel,
-        {
-          title: 'Welcome',
-          description:
-            'This lightweight shell is ready for your merchant tools. Wire up APIs, drop in UI components, and iterate fast.'
-        },
-        h(ActionButton, { onClick: handleAction }, 'Run quick check')
-      ),
-      h(Panel, { title: 'Output', id: 'log-panel' }, h(LogText, { message: log }))
+        Main,
+        null,
+        h(
+          Panel,
+          {
+            title: 'Welcome',
+            description:
+              'This lightweight shell is ready for your merchant tools. Wire up APIs, drop in UI components, and iterate fast.'
+          },
+          h(ActionButton, { onClick: handleAction }, 'Run quick check')
+        ),
+        h(Panel, { title: 'Output', id: 'log-panel' }, h(LogText, { message: log }))
+      )
     )
   );
 }
