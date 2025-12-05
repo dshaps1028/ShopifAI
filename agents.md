@@ -9,6 +9,10 @@ This repo contains an Electron shell plus a local Shopify MCP server. When worki
 - Submodule cleanup: `mcp-server` should be a normal folder (no nested `.git`). If you see submodule warnings, remove `mcp-server/.git` before committing.
 - Styling: UI uses React via CDN in `index.html`; keep color/theme aligned with the Shopify palette already set in CSS variables.
 
+## Formatting standards
+- JavaScript: prefer 2-space indentation, trailing commas where valid, and semicolons at statement ends. Use single quotes for strings except when interpolation requires template literals. Keep imports sorted by module path.
+- JSON: format with 2-space indentation, double-quoted keys/strings, and no trailing commas. When editing config files, keep object keys alphabetized for readability.
+
 ## Before pushing a PR
 - Run `git status` to ensure `mcp-server/.env` and `node_modules` are untracked.
 - Run the app (`npm run dev`) to confirm the UI loads and the MCP server starts without missing env errors.
