@@ -5,7 +5,9 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "start:mcp": "cd mcp-server && npm start",
+    "dev": "npm run start:mcp & npm start"
   },
   "devDependencies": {
     "electron": "^28.2.0"
