@@ -79,6 +79,7 @@ const codexOrders = async (prompt) => {
       properties: {
         limit: { type: 'integer', minimum: 1, maximum: 50, default: 5 },
         status: { type: 'string', nullable: true },
+        financial_status: { type: 'string', nullable: true },
         fulfillment_status: { type: 'string', nullable: true },
         created_at_min: { type: 'string', nullable: true },
         created_at_max: { type: 'string', nullable: true },
@@ -90,6 +91,7 @@ const codexOrders = async (prompt) => {
       required: [
         'limit',
         'status',
+        'financial_status',
         'fulfillment_status',
         'created_at_min',
         'created_at_max',
@@ -108,7 +110,8 @@ const codexOrders = async (prompt) => {
           text:
             'You map user requests about Shopify orders to simple parameters for an orders API. ' +
             'Return JSON matching the schema. If the user asks for a number of orders, set limit; otherwise default to 5. ' +
-            'If they mention a status, include it as status. If they mention fulfillment state, include fulfillment_status. ' +
+            'If they mention an order status, include it as status. If they mention payment status, include financial_status. ' +
+            'If they mention fulfillment state, include fulfillment_status. ' +
             'If they mention a timeframe (e.g., yesterday), set created_at_min and created_at_max to ISO8601 timestamps covering that range. ' +
             'If they mention an email, include it as email. If they mention an order id or number, include order_id or order_number. If they mention a customer name, include customer_name.'
         },

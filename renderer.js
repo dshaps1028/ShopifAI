@@ -53,15 +53,18 @@ const LogList = ({ entries }) =>
     )
   );
 
-const OrdersList = ({ orders, loading, error }) => {
+const OrdersList = ({ orders, loading, error, queried }) => {
   if (loading) {
     return h('p', { className: 'order-sub' }, 'Loading orders…');
   }
   if (error) {
     return h('p', { className: 'order-sub' }, error);
   }
+  if (!queried) {
+    return null;
+  }
   if (!orders.length) {
-    return h('p', { className: 'order-sub' }, 'No orders loaded yet.');
+    return h('p', { className: 'order-sub' }, 'No orders match your query.');
   }
 
   return h(
@@ -85,6 +88,15 @@ const OrdersList = ({ orders, loading, error }) => {
           'p',
           { className: 'order-sub' },
           `Total: ${order.total_price ? `$${order.total_price}` : '—'}`
+        ),
+        h(
+          'p',
+          { className: 'order-sub' },
+          `Date: ${
+            order.created_at
+              ? new Date(order.created_at).toLocaleString()
+              : 'N/A'
+          }`
         )
       )
     )
@@ -97,6 +109,7 @@ function App() {
   const [orders, setOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState('');
+  const [hasQueriedOrders, setHasQueriedOrders] = useState(false);
   const [nlQuery, setNlQuery] = useState('');
   const [nlProcessing, setNlProcessing] = useState(false);
   const [schedulerQuery, setSchedulerQuery] = useState('');
@@ -151,6 +164,19 @@ function App() {
         });
       }
 
+      // Client-side date range filter (created_at)
+      if (queryParams.created_at_min || queryParams.created_at_max) {
+        const minMs = queryParams.created_at_min ? Date.parse(queryParams.created_at_min) : null;
+        const maxMs = queryParams.created_at_max ? Date.parse(queryParams.created_at_max) : null;
+        loaded = loaded.filter((o) => {
+          const ts = o.created_at ? Date.parse(o.created_at) : null;
+          if (ts === null || Number.isNaN(ts)) return false;
+          if (minMs !== null && ts < minMs) return false;
+          if (maxMs !== null && ts > maxMs) return false;
+          return true;
+        });
+      }
+
       setOrders(loaded);
       addLog(loaded.length);
       setStatus('Ready');
@@ -158,6 +184,7 @@ function App() {
       setOrdersError(error.message || 'Failed to fetch orders');
       setStatus('Error');
     } finally {
+      setHasQueriedOrders(true);
       setOrdersLoading(false);
     }
   };
@@ -216,12 +243,40 @@ function App() {
         }
       }
 
+      // Heuristic: derive "yesterday" date range if missing
+      let created_at_min = params.created_at_min;
+      let created_at_max = params.created_at_max;
+      const lcQuery = nlQuery.toLowerCase();
+      if (!created_at_min && !created_at_max && lcQuery.includes('yesterday')) {
+        const now = new Date();
+        const start = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() - 1,
+          0,
+          0,
+          0
+        );
+        const end = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate() - 1,
+          23,
+          59,
+          59,
+          999
+        );
+        created_at_min = start.toISOString();
+        created_at_max = end.toISOString();
+      }
+
       await handleFetchOrders({
         limit: derivedLimit,
         status: params.status,
+        financial_status: params.financial_status,
         fulfillment_status: params.fulfillment_status,
-        created_at_min: params.created_at_min,
-        created_at_max: params.created_at_max,
+        created_at_min,
+        created_at_max,
         email: params.email,
         order_id: params.order_id,
         order_number: derivedOrderNumber,
@@ -292,8 +347,8 @@ function App() {
                 nlProcessing ? 'Working…' : 'Search Shopify'
               )
             ),
-            h(OrdersList, { orders, loading: ordersLoading, error: ordersError })
-          ),
+          h(OrdersList, { orders, loading: ordersLoading, error: ordersError, queried: hasQueriedOrders })
+        ),
           h(
             Panel,
             {
