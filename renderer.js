@@ -37,8 +37,8 @@ const Panel = ({ title, description, id, children }) =>
     children
   );
 
-const ActionButton = ({ onClick, children }) =>
-  h('button', { onClick }, children);
+const ActionButton = ({ onClick, children, ...rest }) =>
+  h('button', { onClick, ...rest }, children);
 
 const LogList = ({ entries }) =>
   h(
@@ -48,7 +48,16 @@ const LogList = ({ entries }) =>
       h(
         'li',
         { key: idx, className: 'log-entry' },
-        `${entry.time.toLocaleTimeString()} — ${entry.count} record${entry.count === 1 ? '' : 's'}`
+        h(
+          'div',
+          { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+          h('strong', null, entry.label || 'Saved query'),
+          h(
+            'span',
+            { className: 'order-sub' },
+            `${entry.time.toLocaleTimeString()} • ${entry.count} record${entry.count === 1 ? '' : 's'}`
+          )
+        )
       )
     )
   );
@@ -114,13 +123,17 @@ function App() {
   const [nlProcessing, setNlProcessing] = useState(false);
   const [schedulerQuery, setSchedulerQuery] = useState('');
   const [schedulerProcessing, setSchedulerProcessing] = useState(false);
+  const [lastQueryLabel, setLastQueryLabel] = useState('');
 
   useEffect(() => {
     setStatus('Ready');
   }, []);
 
-  const addLog = (count) => {
-    setLogs((prev) => [...prev, { time: new Date(), count }]);
+  const addLog = ({ count, label }) => {
+    setLogs((prev) => [
+      ...prev,
+      { time: new Date(), count, label: label || 'Saved query' }
+    ]);
   };
 
   const handleAction = () => {};
@@ -164,6 +177,20 @@ function App() {
         });
       }
 
+      // Client-side financial status filter to guard against parsing mismatches
+      if (queryParams.financial_status) {
+        const target = String(queryParams.financial_status).toLowerCase();
+        loaded = loaded.filter(
+          (o) => o.financial_status && String(o.financial_status).toLowerCase() === target
+        );
+      }
+
+      // Client-side order status filter
+      if (queryParams.status) {
+        const target = String(queryParams.status).toLowerCase();
+        loaded = loaded.filter((o) => o.status && String(o.status).toLowerCase() === target);
+      }
+
       // Client-side date range filter (created_at)
       if (queryParams.created_at_min || queryParams.created_at_max) {
         const minMs = queryParams.created_at_min ? Date.parse(queryParams.created_at_min) : null;
@@ -178,7 +205,6 @@ function App() {
       }
 
       setOrders(loaded);
-      addLog(loaded.length);
       setStatus('Ready');
     } catch (error) {
       setOrdersError(error.message || 'Failed to fetch orders');
@@ -217,12 +243,54 @@ function App() {
     setStatus('Interpreting request…');
 
     try {
+      const trimmedQuery = nlQuery.trim();
+      if (trimmedQuery) {
+        setLastQueryLabel(trimmedQuery);
+      }
       const codexResponse = await window.electronAPI.codexOrders(nlQuery.trim());
       if (!codexResponse?.ok) {
         throw new Error(codexResponse?.error || 'Codex returned an error');
       }
 
       const params = codexResponse.data || {};
+      const paymentStatuses = [
+        'authorized',
+        'pending',
+        'paid',
+        'partially_paid',
+        'partially_refunded',
+        'refunded',
+        'voided',
+        'unpaid'
+      ];
+      const orderStatuses = ['open', 'closed', 'cancelled', 'any'];
+      const normalizeString = (value) =>
+        typeof value === 'string' ? value.trim().toLowerCase() : '';
+      let normalizedStatus = normalizeString(params.status);
+      let normalizedFinancialStatus = normalizeString(params.financial_status);
+      const queryTextLc = nlQuery.toLowerCase();
+
+      // Heuristic: derive financial_status from text if Codex didn't return one
+      if (!normalizedFinancialStatus) {
+        if (queryTextLc.includes('pending') || queryTextLc.includes('awaiting payment')) {
+          normalizedFinancialStatus = 'pending';
+        } else if (queryTextLc.includes('paid') || queryTextLc.includes('completed payment')) {
+          normalizedFinancialStatus = 'paid';
+        } else if (queryTextLc.includes('refunded')) {
+          normalizedFinancialStatus = 'refunded';
+        }
+      }
+
+      // Normalize Codex output: treat payment-like statuses as financial_status instead of order status
+      if (
+        !normalizedFinancialStatus &&
+        normalizedStatus &&
+        !orderStatuses.includes(normalizedStatus.toLowerCase()) &&
+        paymentStatuses.includes(normalizedStatus)
+      ) {
+        normalizedFinancialStatus = normalizedStatus === 'unpaid' ? 'pending' : normalizedStatus;
+        normalizedStatus = '';
+      }
       // Fallback: if Codex didn't return a limit, try to extract a number from the query text
       let derivedLimit = params.limit;
       if (!derivedLimit) {
@@ -270,10 +338,8 @@ function App() {
         created_at_max = end.toISOString();
       }
 
-      await handleFetchOrders({
+      const requestPayload = {
         limit: derivedLimit,
-        status: params.status,
-        financial_status: params.financial_status,
         fulfillment_status: params.fulfillment_status,
         created_at_min,
         created_at_max,
@@ -281,13 +347,26 @@ function App() {
         order_id: params.order_id,
         order_number: derivedOrderNumber,
         customer_name: params.customer_name
-      });
+      };
+
+      if (normalizedStatus) requestPayload.status = normalizedStatus;
+      if (normalizedFinancialStatus) requestPayload.financial_status = normalizedFinancialStatus;
+
+      await handleFetchOrders(requestPayload);
     } catch (error) {
       setOrdersError(error.message || 'Failed to process Codex request');
       setStatus('Error');
     } finally {
       setNlProcessing(false);
     }
+  };
+
+  const handleSaveQuery = () => {
+    if (!hasQueriedOrders) {
+      return;
+    }
+    const label = lastQueryLabel || (nlQuery && nlQuery.trim()) || 'Saved query';
+    addLog({ count: orders.length, label });
   };
 
   return h(
@@ -304,7 +383,7 @@ function App() {
       h(
         Shell,
         null,
-        h(Header, { status, label: 'Recent Queries' }),
+        h(Header, { status, label: 'Saved Queries' }),
         h(Main, null, logs.length ? h('div', { id: 'log-panel' }, h(LogList, { entries: logs })) : null)
       ),
       h(
@@ -346,9 +425,22 @@ function App() {
                 },
                 nlProcessing ? 'Working…' : 'Search Shopify'
               )
-            ),
-          h(OrdersList, { orders, loading: ordersLoading, error: ordersError, queried: hasQueriedOrders })
-        ),
+            )
+          ),
+          hasQueriedOrders && orders.length > 0 && !ordersLoading && !nlProcessing
+            ? h(
+                'div',
+                {
+                  style: {
+                    display: 'flex',
+                    justifyContent: 'flex-start',
+                    marginBottom: '12px'
+                  }
+                },
+                h(ActionButton, { onClick: handleSaveQuery }, 'Save Query & Results')
+              )
+            : null,
+          h(OrdersList, { orders, loading: ordersLoading, error: ordersError, queried: hasQueriedOrders }),
           h(
             Panel,
             {
@@ -368,7 +460,7 @@ function App() {
               },
               h('input', {
                 type: 'text',
-                placeholder: 'Describe the export schedule (e.g., "daily CSV of unfulfilled orders")',
+                placeholder: 'Describe the export schedule (e.g., \"daily CSV of unfulfilled orders\")',
                 value: schedulerQuery,
                 onChange: (event) => setSchedulerQuery(event.target.value),
                 style: { flex: '1 1 240px' }
