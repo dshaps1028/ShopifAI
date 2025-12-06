@@ -37,8 +37,8 @@ const Panel = ({ title, description, id, children }) =>
     children
   );
 
-const ActionButton = ({ onClick, children }) =>
-  h('button', { onClick }, children);
+const ActionButton = ({ onClick, children, ...rest }) =>
+  h('button', { onClick, ...rest }, children);
 
 const LogList = ({ entries }) =>
   h(
@@ -48,7 +48,16 @@ const LogList = ({ entries }) =>
       h(
         'li',
         { key: idx, className: 'log-entry' },
-        `${entry.time.toLocaleTimeString()} — ${entry.count} record${entry.count === 1 ? '' : 's'}`
+        h(
+          'div',
+          { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+          h('strong', null, entry.label || 'Saved query'),
+          h(
+            'span',
+            { className: 'order-sub' },
+            `${entry.time.toLocaleTimeString()} • ${entry.count} record${entry.count === 1 ? '' : 's'}`
+          )
+        )
       )
     )
   );
@@ -103,6 +112,78 @@ const OrdersList = ({ orders, loading, error, queried }) => {
   );
 };
 
+const startOfDay = (date) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+
+const endOfDay = (date) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+
+const deriveDateRangeFromQuery = (query, existingMin, existingMax) => {
+  let created_at_min = existingMin;
+  let created_at_max = existingMax;
+
+  if (created_at_min || created_at_max) {
+    return { created_at_min, created_at_max };
+  }
+
+  const lcQuery = query.toLowerCase();
+  const dayMs = 24 * 60 * 60 * 1000;
+  let rangeStart = null;
+  let rangeEnd = null;
+
+  const explicitDateMatch =
+    query.match(/\b\d{4}-\d{2}-\d{2}\b/) ||
+    query.match(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i);
+  if (explicitDateMatch) {
+    const parsed = Date.parse(explicitDateMatch[0]);
+    if (!Number.isNaN(parsed)) {
+      const parsedDate = new Date(parsed);
+      rangeStart = startOfDay(parsedDate);
+      rangeEnd = endOfDay(parsedDate);
+    }
+  } else if (lcQuery.includes('last year')) {
+    const now = new Date();
+    rangeStart = new Date(now.getFullYear() - 1, 0, 1, 0, 0, 0, 0);
+    rangeEnd = new Date(now.getFullYear(), 0, 0, 23, 59, 59, 999);
+  } else if (lcQuery.includes('past year')) {
+    const now = new Date();
+    rangeStart = startOfDay(new Date(now.getTime() - 365 * dayMs));
+    rangeEnd = endOfDay(now);
+  } else if (lcQuery.includes('last month')) {
+    const now = new Date();
+    rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+    rangeEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+  } else if (
+    lcQuery.includes('past month') ||
+    /(past|last)\s+30\s+days/.test(lcQuery)
+  ) {
+    const now = new Date();
+    rangeStart = startOfDay(new Date(now.getTime() - 30 * dayMs));
+    rangeEnd = endOfDay(now);
+  } else if (
+    lcQuery.includes('last week') ||
+    lcQuery.includes('past week') ||
+    /(past|last)\s+7\s+days/.test(lcQuery)
+  ) {
+    const now = new Date();
+    rangeStart = startOfDay(new Date(now.getTime() - 7 * dayMs));
+    rangeEnd = endOfDay(now);
+  } else if (lcQuery.includes('yesterday')) {
+    const now = new Date();
+    rangeStart = startOfDay(new Date(now.getTime() - dayMs));
+    rangeEnd = endOfDay(new Date(now.getTime() - dayMs));
+  } else if (lcQuery.includes('today')) {
+    const now = new Date();
+    rangeStart = startOfDay(now);
+    rangeEnd = endOfDay(now);
+  }
+
+  return {
+    created_at_min: rangeStart ? rangeStart.toISOString() : created_at_min,
+    created_at_max: rangeEnd ? rangeEnd.toISOString() : created_at_max
+  };
+};
+
 function App() {
   const [status, setStatus] = useState('Loading…');
   const [logs, setLogs] = useState([]);
@@ -114,13 +195,17 @@ function App() {
   const [nlProcessing, setNlProcessing] = useState(false);
   const [schedulerQuery, setSchedulerQuery] = useState('');
   const [schedulerProcessing, setSchedulerProcessing] = useState(false);
+  const [lastQueryLabel, setLastQueryLabel] = useState('');
 
   useEffect(() => {
     setStatus('Ready');
   }, []);
 
-  const addLog = (count) => {
-    setLogs((prev) => [...prev, { time: new Date(), count }]);
+  const addLog = ({ count, label }) => {
+    setLogs((prev) => [
+      ...prev,
+      { time: new Date(), count, label: label || 'Saved query' }
+    ]);
   };
 
   const handleAction = () => {};
@@ -135,8 +220,19 @@ function App() {
         throw new Error('MCP client is not available');
       }
 
-      const limit = Math.max(1, Math.min(50, Number(queryParams.limit) || 5));
-      const result = await window.electronAPI.mcpListOrders({ ...queryParams, limit });
+      const normalizedLimit =
+        queryParams.limit !== undefined
+          ? Math.max(1, Math.min(50, Number(queryParams.limit)))
+          : undefined;
+
+      const requestPayload = { ...queryParams };
+      if (normalizedLimit && !Number.isNaN(normalizedLimit)) {
+        requestPayload.limit = normalizedLimit;
+      } else {
+        delete requestPayload.limit;
+      }
+
+      const result = await window.electronAPI.mcpListOrders(requestPayload);
       if (!result?.ok) {
         throw new Error(result?.error || 'MCP call failed');
       }
@@ -164,6 +260,38 @@ function App() {
         });
       }
 
+      if (queryParams.email) {
+        const target = String(queryParams.email).trim().toLowerCase();
+        loaded = loaded.filter(
+          (o) =>
+            (o.email && String(o.email).toLowerCase() === target) ||
+            (o.customer && o.customer.email && String(o.customer.email).toLowerCase() === target)
+        );
+      }
+
+      if (queryParams.financial_status) {
+        const target = String(queryParams.financial_status).toLowerCase();
+        loaded = loaded.filter(
+          (o) => o.financial_status && String(o.financial_status).toLowerCase() === target
+        );
+      }
+
+      if (queryParams.status) {
+        const target = String(queryParams.status).toLowerCase();
+        loaded = loaded.filter((o) => o.status && String(o.status).toLowerCase() === target);
+      }
+
+      if (queryParams.sku) {
+        const target = String(queryParams.sku).trim().toLowerCase();
+        loaded = loaded.filter(
+          (o) =>
+            Array.isArray(o.line_items) &&
+            o.line_items.some(
+              (item) => item.sku && String(item.sku).trim().toLowerCase() === target
+            )
+        );
+      }
+
       // Client-side date range filter (created_at)
       if (queryParams.created_at_min || queryParams.created_at_max) {
         const minMs = queryParams.created_at_min ? Date.parse(queryParams.created_at_min) : null;
@@ -178,7 +306,6 @@ function App() {
       }
 
       setOrders(loaded);
-      addLog(loaded.length);
       setStatus('Ready');
     } catch (error) {
       setOrdersError(error.message || 'Failed to fetch orders');
@@ -202,6 +329,14 @@ function App() {
     }, 300);
   };
 
+  const handleSaveQuery = () => {
+    if (!hasQueriedOrders || !orders.length) {
+      return;
+    }
+    const label = lastQueryLabel || (nlQuery && nlQuery.trim()) || 'Saved query';
+    addLog({ count: orders.length, label });
+  };
+
   const handleCodexOrders = async () => {
     if (!nlQuery.trim()) {
       return;
@@ -217,15 +352,57 @@ function App() {
     setStatus('Interpreting request…');
 
     try {
-      const codexResponse = await window.electronAPI.codexOrders(nlQuery.trim());
+      const trimmedQuery = nlQuery.trim();
+      if (trimmedQuery) {
+        setLastQueryLabel(trimmedQuery);
+      }
+      const codexResponse = await window.electronAPI.codexOrders(trimmedQuery);
       if (!codexResponse?.ok) {
         throw new Error(codexResponse?.error || 'Codex returned an error');
       }
 
       const params = codexResponse.data || {};
-      // Fallback: if Codex didn't return a limit, try to extract a number from the query text
+      const paymentStatuses = [
+        'authorized',
+        'pending',
+        'paid',
+        'partially_paid',
+        'partially_refunded',
+        'refunded',
+        'voided',
+        'unpaid'
+      ];
+      const orderStatuses = ['open', 'closed', 'cancelled', 'any'];
+      const normalizeString = (value) =>
+        typeof value === 'string' ? value.trim().toLowerCase() : '';
+      let normalizedStatus = normalizeString(params.status);
+      let normalizedFinancialStatus = normalizeString(params.financial_status);
+      const queryTextLc = nlQuery.toLowerCase();
+
+      // Heuristic: derive financial_status from text if Codex didn't return one
+      if (!normalizedFinancialStatus) {
+        if (queryTextLc.includes('pending') || queryTextLc.includes('awaiting payment')) {
+          normalizedFinancialStatus = 'pending';
+        } else if (queryTextLc.includes('paid') || queryTextLc.includes('completed payment')) {
+          normalizedFinancialStatus = 'paid';
+        } else if (queryTextLc.includes('refunded')) {
+          normalizedFinancialStatus = 'refunded';
+        }
+      }
+
+      // Normalize Codex output: treat payment-like statuses as financial_status instead of order status
+      if (
+        !normalizedFinancialStatus &&
+        normalizedStatus &&
+        !orderStatuses.includes(normalizedStatus) &&
+        paymentStatuses.includes(normalizedStatus)
+      ) {
+        normalizedFinancialStatus = normalizedStatus === 'unpaid' ? 'pending' : normalizedStatus;
+        normalizedStatus = '';
+      }
+      // Fallback: if Codex didn't return a limit, try to extract a number from the query text; otherwise leave unlimited
       let derivedLimit = params.limit;
-      if (!derivedLimit) {
+      if (derivedLimit === undefined || derivedLimit === null) {
         const match = nlQuery.match(/\b(\d{1,2})\b/);
         if (match) {
           derivedLimit = Number(match[1]);
@@ -243,45 +420,54 @@ function App() {
         }
       }
 
-      // Heuristic: derive "yesterday" date range if missing
-      let created_at_min = params.created_at_min;
-      let created_at_max = params.created_at_max;
-      const lcQuery = nlQuery.toLowerCase();
-      if (!created_at_min && !created_at_max && lcQuery.includes('yesterday')) {
-        const now = new Date();
-        const start = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate() - 1,
-          0,
-          0,
-          0
-        );
-        const end = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate() - 1,
-          23,
-          59,
-          59,
-          999
-        );
-        created_at_min = start.toISOString();
-        created_at_max = end.toISOString();
+      // Heuristic: extract email if Codex missed it
+      let derivedEmail = params.email;
+      if (!derivedEmail) {
+        const emailMatch = nlQuery.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+        if (emailMatch) {
+          derivedEmail = emailMatch[0];
+        }
       }
 
-      await handleFetchOrders({
-        limit: derivedLimit,
-        status: params.status,
-        financial_status: params.financial_status,
+      // Heuristic: extract SKU if Codex missed it (look for "sku ABC-123" patterns)
+      let derivedSku = params.sku;
+      if (!derivedSku) {
+        const skuMatch =
+          nlQuery.match(/sku\s*[:#]?\s*([A-Z0-9._-]{3,})/i)?.[1] ||
+          nlQuery.match(/\b[A-Z0-9][A-Z0-9._-]{2,}\b/)?.[0];
+        if (skuMatch) {
+          derivedSku = skuMatch;
+        }
+      }
+
+      const { created_at_min, created_at_max } = deriveDateRangeFromQuery(
+        nlQuery,
+        params.created_at_min,
+        params.created_at_max
+      );
+
+      const requestPayload = {
         fulfillment_status: params.fulfillment_status,
         created_at_min,
         created_at_max,
-        email: params.email,
+        email: derivedEmail,
         order_id: params.order_id,
         order_number: derivedOrderNumber,
-        customer_name: params.customer_name
-      });
+        customer_name: params.customer_name,
+        sku: derivedSku
+      };
+
+      if (derivedLimit !== undefined && derivedLimit !== null) {
+        requestPayload.limit = derivedLimit;
+      }
+      if (normalizedStatus) {
+        requestPayload.status = normalizedStatus;
+      }
+      if (normalizedFinancialStatus) {
+        requestPayload.financial_status = normalizedFinancialStatus;
+      }
+
+      await handleFetchOrders(requestPayload);
     } catch (error) {
       setOrdersError(error.message || 'Failed to process Codex request');
       setStatus('Error');
@@ -304,7 +490,7 @@ function App() {
       h(
         Shell,
         null,
-        h(Header, { status, label: 'Recent Queries' }),
+        h(Header, { status, label: 'Saved Queries' }),
         h(Main, null, logs.length ? h('div', { id: 'log-panel' }, h(LogList, { entries: logs })) : null)
       ),
       h(
@@ -346,9 +532,22 @@ function App() {
                 },
                 nlProcessing ? 'Working…' : 'Search Shopify'
               )
-            ),
-          h(OrdersList, { orders, loading: ordersLoading, error: ordersError, queried: hasQueriedOrders })
-        ),
+            )
+          ),
+          hasQueriedOrders && orders.length > 0 && !ordersLoading && !nlProcessing
+            ? h(
+                'div',
+                {
+                  style: {
+                    display: 'flex',
+                    justifyContent: 'flex-start',
+                    marginBottom: '12px'
+                  }
+                },
+                h(ActionButton, { onClick: handleSaveQuery }, 'Save Query & Results')
+              )
+            : null,
+          h(OrdersList, { orders, loading: ordersLoading, error: ordersError, queried: hasQueriedOrders }),
           h(
             Panel,
             {
