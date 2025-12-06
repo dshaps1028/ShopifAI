@@ -1,11 +1,6 @@
 const { useEffect, useState } = React;
 const h = React.createElement;
 
-const formatLog = (message) => {
-  const time = new Date().toLocaleTimeString();
-  return `[${time}] ${message}`;
-};
-
 const Shell = ({ children }) => h('div', { className: 'shell' }, children);
 
 const PageTitle = ({ title, subtitle }) =>
@@ -45,7 +40,18 @@ const Panel = ({ title, description, id, children }) =>
 const ActionButton = ({ onClick, children }) =>
   h('button', { onClick }, children);
 
-const LogText = ({ message }) => h('p', { id: 'log' }, message);
+const LogList = ({ entries }) =>
+  h(
+    'ul',
+    { className: 'logs' },
+    entries.map((entry, idx) =>
+      h(
+        'li',
+        { key: idx, className: 'log-entry' },
+        `${entry.time.toLocaleTimeString()} — ${entry.count} record${entry.count === 1 ? '' : 's'}`
+      )
+    )
+  );
 
 const OrdersList = ({ orders, loading, error }) => {
   if (loading) {
@@ -87,28 +93,29 @@ const OrdersList = ({ orders, loading, error }) => {
 
 function App() {
   const [status, setStatus] = useState('Loading…');
-  const [log, setLog] = useState('No actions yet.');
+  const [logs, setLogs] = useState([]);
   const [orders, setOrders] = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState('');
   const [nlQuery, setNlQuery] = useState('');
   const [nlProcessing, setNlProcessing] = useState(false);
+  const [schedulerQuery, setSchedulerQuery] = useState('');
+  const [schedulerProcessing, setSchedulerProcessing] = useState(false);
 
   useEffect(() => {
     setStatus('Ready');
-    setLog(formatLog('Renderer initialized.'));
   }, []);
 
-  const handleAction = () => {
-    const response = window.electronAPI?.ping?.() ?? 'unavailable';
-    setLog(formatLog(`Ping response: ${response}`));
+  const addLog = (count) => {
+    setLogs((prev) => [...prev, { time: new Date(), count }]);
   };
+
+  const handleAction = () => {};
 
   const handleFetchOrders = async (queryParams = {}) => {
     setOrdersLoading(true);
     setOrdersError('');
     setStatus('Fetching orders…');
-    setLog(formatLog('Fetching orders via MCP tool…'));
 
     try {
       if (!window.electronAPI?.mcpListOrders) {
@@ -123,16 +130,27 @@ function App() {
 
       const loaded = result.orders || [];
       setOrders(loaded);
-      const summary = result.text || `Fetched ${loaded.length} orders.`;
-      setLog(formatLog(summary));
+      addLog(loaded.length);
       setStatus('Ready');
     } catch (error) {
       setOrdersError(error.message || 'Failed to fetch orders');
-      setLog(formatLog(`Failed to fetch orders: ${error.message}`));
       setStatus('Error');
     } finally {
       setOrdersLoading(false);
     }
+  };
+
+  const handleSchedule = async () => {
+    if (!schedulerQuery.trim()) {
+      return;
+    }
+    setSchedulerProcessing(true);
+    setStatus('Preparing schedule…');
+    // Placeholder for future MCP tool to create recurring exports
+    setTimeout(() => {
+      setStatus('Ready');
+      setSchedulerProcessing(false);
+    }, 300);
   };
 
   const handleCodexOrders = async () => {
@@ -148,7 +166,6 @@ function App() {
     setNlProcessing(true);
     setOrdersError('');
     setStatus('Interpreting request…');
-    setLog(formatLog(`Sending to Codex: "${nlQuery.trim()}"`));
 
     try {
       const codexResponse = await window.electronAPI.codexOrders(nlQuery.trim());
@@ -157,7 +174,6 @@ function App() {
       }
 
       const params = codexResponse.data || {};
-      setLog(formatLog(`Codex mapped request to: ${JSON.stringify(params)}`));
       // Fallback: if Codex didn't return a limit, try to extract a number from the query text
       let derivedLimit = params.limit;
       if (!derivedLimit) {
@@ -178,7 +194,6 @@ function App() {
     } catch (error) {
       setOrdersError(error.message || 'Failed to process Codex request');
       setStatus('Error');
-      setLog(formatLog(`Codex failed: ${error.message}`));
     } finally {
       setNlProcessing(false);
     }
@@ -193,54 +208,91 @@ function App() {
         'Manage your orders, analyze your order data and learn more about Shopify all in one place'
     }),
     h(
-      Shell,
-      null,
-      h(Header, { status, label: 'Order Management Hub' }),
+      'div',
+      { className: 'layout' },
       h(
-        Main,
+        Shell,
         null,
+        h(Header, { status, label: 'Recent Queries' }),
+        h(Main, null, logs.length ? h('div', { id: 'log-panel' }, h(LogList, { entries: logs })) : null)
+      ),
+      h(
+        Shell,
+        null,
+        h(Header, { status, label: 'Order Management Hub' }),
         h(
-          Panel,
-          {
-            title: 'Orders',
-            description: 'Fetch recent orders from the Shopify MCP HTTP bridge.'
-          },
+          Main,
+          null,
           h(
-            'div',
-            { style: { display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '8px' } },
-            h(ActionButton, { onClick: handleFetchOrders }, 'Fetch orders'),
-            ordersLoading ? h('span', { className: 'order-sub' }, 'Loading…') : null
-          ),
-          h(
-            'div',
+            Panel,
             {
-              style: {
-                display: 'flex',
-                gap: '10px',
-                alignItems: 'center',
-                marginBottom: '12px',
-                flexWrap: 'wrap'
-              }
+              title: 'Order Search',
+              description: 'search for your Shopify orders using natural language'
             },
-            h('input', {
-              type: 'text',
-              placeholder: 'Ask Codex: e.g., "show 3 pending orders from yesterday"',
-              value: nlQuery,
-              onChange: (event) => setNlQuery(event.target.value),
-              style: { flex: '1 1 240px' }
-            }),
             h(
-              ActionButton,
+              'div',
               {
-                onClick: handleCodexOrders,
-                disabled: nlProcessing || ordersLoading || !nlQuery.trim()
+                style: {
+                  display: 'flex',
+                  gap: '10px',
+                  alignItems: 'center',
+                  marginBottom: '12px',
+                  flexWrap: 'wrap'
+                }
               },
-              nlProcessing ? 'Working…' : 'Ask Codex'
-            )
+              h('input', {
+                type: 'text',
+                placeholder: 'Ask Codex: e.g., "show 3 pending orders from yesterday"',
+                value: nlQuery,
+                onChange: (event) => setNlQuery(event.target.value),
+                style: { flex: '1 1 240px' }
+              }),
+              h(
+                ActionButton,
+                {
+                  onClick: handleCodexOrders,
+                  disabled: nlProcessing || ordersLoading || !nlQuery.trim()
+                },
+                nlProcessing ? 'Working…' : 'Search Shopify'
+              )
+            ),
+            h(OrdersList, { orders, loading: ordersLoading, error: ordersError })
           ),
-          h(OrdersList, { orders, loading: ordersLoading, error: ordersError })
-        ),
-        h(Panel, { title: 'Output', id: 'log-panel' }, h(LogText, { message: log }))
+          h(
+            Panel,
+            {
+              title: 'Scheduler',
+              description: 'Create a recurring export using natural language'
+            },
+            h(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  gap: '10px',
+                  alignItems: 'center',
+                  marginBottom: '12px',
+                  flexWrap: 'wrap'
+                }
+              },
+              h('input', {
+                type: 'text',
+                placeholder: 'Describe the export schedule (e.g., "daily CSV of unfulfilled orders")',
+                value: schedulerQuery,
+                onChange: (event) => setSchedulerQuery(event.target.value),
+                style: { flex: '1 1 240px' }
+              }),
+              h(
+                ActionButton,
+                {
+                  onClick: handleSchedule,
+                  disabled: schedulerProcessing || !schedulerQuery.trim()
+                },
+                schedulerProcessing ? 'Working…' : 'Create schedule'
+              )
+            )
+          )
+        )
       )
     )
   );

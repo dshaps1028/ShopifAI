@@ -110,6 +110,24 @@
       line-height: 1.45;
     }
 
+    .layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 16px;
+      align-items: start;
+      width: min(1040px, 95vw);
+    }
+
+    .layout .shell {
+      width: 100%;
+    }
+
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
     button {
       all: unset;
       padding: 10px 14px;
@@ -204,6 +222,25 @@
       color: var(--muted);
       font-size: 13px;
     }
+
+    .logs {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .log-entry {
+      padding: 10px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
   </style>
 </head>
 <body>
