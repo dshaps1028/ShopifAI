@@ -260,15 +260,7 @@ function App() {
         });
       }
 
-      if (queryParams.email) {
-        const target = String(queryParams.email).trim().toLowerCase();
-        loaded = loaded.filter(
-          (o) =>
-            (o.email && String(o.email).toLowerCase() === target) ||
-            (o.customer && o.customer.email && String(o.customer.email).toLowerCase() === target)
-        );
-      }
-
+      // Client-side financial status filter to guard against parsing mismatches
       if (queryParams.financial_status) {
         const target = String(queryParams.financial_status).toLowerCase();
         loaded = loaded.filter(
@@ -276,20 +268,10 @@ function App() {
         );
       }
 
+      // Client-side order status filter
       if (queryParams.status) {
         const target = String(queryParams.status).toLowerCase();
         loaded = loaded.filter((o) => o.status && String(o.status).toLowerCase() === target);
-      }
-
-      if (queryParams.sku) {
-        const target = String(queryParams.sku).trim().toLowerCase();
-        loaded = loaded.filter(
-          (o) =>
-            Array.isArray(o.line_items) &&
-            o.line_items.some(
-              (item) => item.sku && String(item.sku).trim().toLowerCase() === target
-            )
-        );
       }
 
       // Client-side date range filter (created_at)
@@ -356,7 +338,7 @@ function App() {
       if (trimmedQuery) {
         setLastQueryLabel(trimmedQuery);
       }
-      const codexResponse = await window.electronAPI.codexOrders(trimmedQuery);
+      const codexResponse = await window.electronAPI.codexOrders(nlQuery.trim());
       if (!codexResponse?.ok) {
         throw new Error(codexResponse?.error || 'Codex returned an error');
       }
@@ -394,13 +376,13 @@ function App() {
       if (
         !normalizedFinancialStatus &&
         normalizedStatus &&
-        !orderStatuses.includes(normalizedStatus) &&
+        !orderStatuses.includes(normalizedStatus.toLowerCase()) &&
         paymentStatuses.includes(normalizedStatus)
       ) {
         normalizedFinancialStatus = normalizedStatus === 'unpaid' ? 'pending' : normalizedStatus;
         normalizedStatus = '';
       }
-      // Fallback: if Codex didn't return a limit, try to extract a number from the query text; otherwise leave unlimited
+      // Fallback: if Codex didn't return a limit, try to extract a number from the query text
       let derivedLimit = params.limit;
       if (derivedLimit === undefined || derivedLimit === null) {
         const match = nlQuery.match(/\b(\d{1,2})\b/);
@@ -440,32 +422,19 @@ function App() {
         }
       }
 
-      const { created_at_min, created_at_max } = deriveDateRangeFromQuery(
-        nlQuery,
-        params.created_at_min,
-        params.created_at_max
-      );
-
       const requestPayload = {
+        limit: derivedLimit,
         fulfillment_status: params.fulfillment_status,
         created_at_min,
         created_at_max,
         email: derivedEmail,
         order_id: params.order_id,
         order_number: derivedOrderNumber,
-        customer_name: params.customer_name,
-        sku: derivedSku
+        customer_name: params.customer_name
       };
 
-      if (derivedLimit !== undefined && derivedLimit !== null) {
-        requestPayload.limit = derivedLimit;
-      }
-      if (normalizedStatus) {
-        requestPayload.status = normalizedStatus;
-      }
-      if (normalizedFinancialStatus) {
-        requestPayload.financial_status = normalizedFinancialStatus;
-      }
+      if (normalizedStatus) requestPayload.status = normalizedStatus;
+      if (normalizedFinancialStatus) requestPayload.financial_status = normalizedFinancialStatus;
 
       await handleFetchOrders(requestPayload);
     } catch (error) {
@@ -474,6 +443,14 @@ function App() {
     } finally {
       setNlProcessing(false);
     }
+  };
+
+  const handleSaveQuery = () => {
+    if (!hasQueriedOrders) {
+      return;
+    }
+    const label = lastQueryLabel || (nlQuery && nlQuery.trim()) || 'Saved query';
+    addLog({ count: orders.length, label });
   };
 
   return h(
@@ -567,7 +544,7 @@ function App() {
               },
               h('input', {
                 type: 'text',
-                placeholder: 'Describe the export schedule (e.g., "daily CSV of unfulfilled orders")',
+                placeholder: 'Describe the export schedule (e.g., \"daily CSV of unfulfilled orders\")',
                 value: schedulerQuery,
                 onChange: (event) => setSchedulerQuery(event.target.value),
                 style: { flex: '1 1 240px' }
