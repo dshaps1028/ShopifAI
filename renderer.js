@@ -260,6 +260,16 @@ function App() {
         });
       }
 
+      // Client-side email filter (Shopify list endpoint doesn't filter by email directly)
+      if (queryParams.email) {
+        const target = String(queryParams.email).trim().toLowerCase();
+        loaded = loaded.filter(
+          (o) =>
+            (o.email && String(o.email).toLowerCase() === target) ||
+            (o.customer && o.customer.email && String(o.customer.email).toLowerCase() === target)
+        );
+      }
+
       // Client-side financial status filter to guard against parsing mismatches
       if (queryParams.financial_status) {
         const target = String(queryParams.financial_status).toLowerCase();
@@ -272,6 +282,17 @@ function App() {
       if (queryParams.status) {
         const target = String(queryParams.status).toLowerCase();
         loaded = loaded.filter((o) => o.status && String(o.status).toLowerCase() === target);
+      }
+
+      if (queryParams.sku) {
+        const target = String(queryParams.sku).trim().toLowerCase();
+        loaded = loaded.filter(
+          (o) =>
+            Array.isArray(o.line_items) &&
+            o.line_items.some(
+              (item) => item.sku && String(item.sku).trim().toLowerCase() === target
+            )
+        );
       }
 
       // Client-side date range filter (created_at)
@@ -330,6 +351,8 @@ function App() {
     }
 
     setNlProcessing(true);
+    setOrders([]);
+    setHasQueriedOrders(false);
     setOrdersError('');
     setStatus('Interpreting request…');
 
@@ -422,17 +445,26 @@ function App() {
         }
       }
 
+      const { created_at_min, created_at_max } = deriveDateRangeFromQuery(
+        nlQuery,
+        params.created_at_min,
+        params.created_at_max
+      );
+
       const requestPayload = {
-        limit: derivedLimit,
         fulfillment_status: params.fulfillment_status,
         created_at_min,
         created_at_max,
         email: derivedEmail,
         order_id: params.order_id,
         order_number: derivedOrderNumber,
-        customer_name: params.customer_name
+        customer_name: params.customer_name,
+        sku: derivedSku
       };
 
+      if (derivedLimit !== undefined && derivedLimit !== null) {
+        requestPayload.limit = derivedLimit;
+      }
       if (normalizedStatus) requestPayload.status = normalizedStatus;
       if (normalizedFinancialStatus) requestPayload.financial_status = normalizedFinancialStatus;
 
@@ -443,14 +475,6 @@ function App() {
     } finally {
       setNlProcessing(false);
     }
-  };
-
-  const handleSaveQuery = () => {
-    if (!hasQueriedOrders) {
-      return;
-    }
-    const label = lastQueryLabel || (nlQuery && nlQuery.trim()) || 'Saved query';
-    addLog({ count: orders.length, label });
   };
 
   return h(
