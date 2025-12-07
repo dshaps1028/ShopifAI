@@ -811,6 +811,8 @@ function App() {
     setChatMessages((prev) => [...prev, { role: 'user', text: trimmed }]);
     setSchedulerProcessing(true);
     try {
+      const assistantMessages = [];
+      let summaryParts = [];
       const draft = {
         line_items: createSku ? [{ sku: createSku, quantity: createQuantity }] : [],
         note: schedulerQuery || ''
@@ -819,16 +821,25 @@ function App() {
       if (!result?.ok) {
         throw new Error(result?.error || 'Codex order composer failed');
       }
-      const data = result.data || {};
+      const raw = result.data || {};
+      const data =
+        typeof raw === 'string'
+          ? (() => {
+              try {
+                return JSON.parse(raw);
+              } catch {
+                return { reply: raw };
+              }
+            })()
+          : raw;
       console.log('[order-chat] codex composer data:', data);
-      const replyText = data.reply || 'Got it—working on that.';
-      setChatMessages((prev) => [...prev, { role: 'assistant', text: replyText }]);
+      let combinedReply = data.reply ? String(data.reply) : '';
       setShowScheduleModal(true);
       if (data.action === 'search') {
         await handleProductSearch(data.search_query);
       }
       if (data.action === 'update_draft') {
-        let summaryParts = [];
+        // Keep draft updates to reply only; state still updates SKU/qty
         if (data.line_items && data.line_items.length) {
           const first = data.line_items[0];
           if (first.sku) {
@@ -837,29 +848,13 @@ function App() {
             setCreateSku(String(first.variant_id));
           }
           if (first.quantity) setCreateQuantity(first.quantity);
-
-          const lines = data.line_items
-            .map(
-              (li) =>
-                `SKU/Variant: ${li.sku || li.variant_id || 'N/A'} • Qty: ${li.quantity || 1}`
-            )
-            .join('\n');
-          summaryParts.push(lines);
-        }
-        if (data.email) {
-          summaryParts.push(`Email: ${data.email}`);
-        }
-        if (data.note) {
-          setSchedulerQuery(data.note);
-          summaryParts.push(`Note: ${data.note}`);
-        }
-        if (summaryParts.length) {
-          setChatMessages((prev) => [
-            ...prev,
-            { role: 'assistant', text: `Draft updated:\n${summaryParts.join('\n')}` }
-          ]);
         }
       }
+      if (!combinedReply) {
+        combinedReply = JSON.stringify(data, null, 2);
+      }
+      console.log('[order-chat] combinedReply:', combinedReply);
+      assistantMessages.push({ role: 'assistant', text: combinedReply });
       if (data.action === 'submit' && data.confirm_submit) {
         const summaryLine =
           createSku && createQuantity
@@ -871,10 +866,18 @@ function App() {
             : draft.line_items,
           note: schedulerQuery.trim() || undefined
         });
-        setChatMessages((prev) => [...prev, { role: 'assistant', text: summaryLine }]);
+        assistantMessages.push({ role: 'assistant', text: summaryLine });
         setSchedulerProcessing(false);
         setChatInput('');
         setShowScheduleModal(true);
+        if (assistantMessages.length) {
+          setChatMessages((prev) => {
+            const next = [...prev, ...assistantMessages];
+            console.log('[order-chat] assistantMessages to append (submit):', assistantMessages);
+            console.log('[order-chat] appended messages after submit prompt:', next.map((m) => m.text));
+            return next;
+          });
+        }
         return;
       }
       // Heuristic: if user clearly asked about products and no search was run, run a broad search
@@ -882,6 +885,14 @@ function App() {
         !data.action || data.action === 'none' || data.action === 'update_draft';
       if (needsProductList && /\bproduct/i.test(trimmed)) {
         await handleProductSearch('');
+      }
+      if (assistantMessages.length) {
+        setChatMessages((prev) => {
+          const next = [...prev, ...assistantMessages];
+          console.log('[order-chat] assistantMessages to append:', assistantMessages);
+          console.log('[order-chat] appended messages:', next.map((m) => m.text));
+          return next;
+        });
       }
     } catch (error) {
       setOrdersError(error.message || 'Codex order composer failed');
