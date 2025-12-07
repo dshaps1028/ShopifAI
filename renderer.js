@@ -1298,13 +1298,6 @@ function App() {
           selectedOrder
             ? h(Modal, { order: selectedOrder, onClose: () => setSelectedOrder(null) })
             : null,
-          h(OrdersList, {
-            orders,
-            loading: ordersLoading,
-            error: ordersError,
-            queried: hasQueriedOrders,
-            onSelect: setSelectedOrder
-          }),
           h(
             Panel,
             {
