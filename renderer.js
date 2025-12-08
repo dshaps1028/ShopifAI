@@ -51,7 +51,32 @@ const Modal = ({ order, onClose, onEdit }) => {
     financial_status: order.financial_status || 'unknown',
     fulfillment_status: order.fulfillment_status || 'unfulfilled',
     created_at: order.created_at,
-    line_items: Array.isArray(order.line_items) ? order.line_items : []
+    line_items: Array.isArray(order.line_items) ? order.line_items : [],
+    customer_name:
+      (order.customer &&
+        [order.customer.first_name, order.customer.last_name].filter(Boolean).join(' ')) ||
+      (order.shipping_address && order.shipping_address.name) ||
+      '',
+    phone:
+      order.phone ||
+      (order.customer && order.customer.phone) ||
+      (order.shipping_address && order.shipping_address.phone) ||
+      '',
+    shipping_address: order.shipping_address || null,
+    billing_address: order.billing_address || null,
+    tags: order.tags || '',
+    note: order.note || ''
+  };
+  const formatAddress = (addr) => {
+    if (!addr) return '—';
+    const parts = [
+      addr.name,
+      [addr.address1, addr.address2].filter(Boolean).join(' ').trim(),
+      [addr.city, addr.province_code, addr.zip].filter(Boolean).join(', ').replace(/^, /, ''),
+      addr.country,
+      addr.phone
+    ].filter(Boolean);
+    return parts.length ? parts.join('\n') : '—';
   };
   return h(
     'div',
@@ -74,7 +99,9 @@ const Modal = ({ order, onClose, onEdit }) => {
       {
         style: {
           background: 'rgba(255,255,255,0.12)',
-          color: '#e8f4ec',
+          color: '#fff',
+          '--muted': '#fff',
+          fontSize: '16px',
           borderRadius: '6px',
           padding: '20px',
           width: 'min(780px, 90vw)',
@@ -87,88 +114,150 @@ const Modal = ({ order, onClose, onEdit }) => {
         onClick: (e) => e.stopPropagation()
       },
       h(
-        'button',
-        {
-          onClick: onClose,
-          style: {
-            position: 'absolute',
-            top: '10px',
-            right: '10px',
-            background: '#000',
-            borderRadius: '6px',
-            width: '28px',
-            height: '28px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#e8f4ec',
-            border: '1px solid rgba(255,255,255,0.15)'
-          }
-        },
-        '✕'
-      ),
-      h(
         'div',
         {
           style: {
             position: 'absolute',
             top: '10px',
-            left: '10px',
+            right: '10px',
             display: 'flex',
-            gap: '8px'
+            alignItems: 'center',
+            gap: '6px'
           }
         },
         h(
-          'button',
+          'a',
           {
-            onClick: onEdit,
+            onClick: (e) => {
+              e.preventDefault();
+              onEdit && onEdit();
+            },
             style: {
-              padding: '6px 10px',
-              borderRadius: '6px',
-              background: 'rgba(149,191,72,0.2)',
-              color: '#0f1b14',
-              border: '1px solid rgba(149,191,72,0.6)',
+              color: 'rgba(149,191,72,0.9)',
+              textDecoration: 'none',
               fontWeight: 700,
+              padding: '4px 8px',
+              borderRadius: '6px',
               cursor: 'pointer'
-            }
+            },
+            href: '#'
           },
           'Edit Order'
+        ),
+        h(
+          'button',
+          {
+            onClick: onClose,
+            style: {
+              width: '28px',
+              height: '28px',
+              background: '#000',
+              borderRadius: '6px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#e8f4ec',
+              border: '1px solid rgba(255,255,255,0.15)'
+            }
+          },
+          '✕'
         )
       ),
-      h('h2', null, order.name || `Order #${order.id}`),
+      h('h2', { style: { marginTop: 0 } }, order.name || `Order #${order.id}`),
+      h('hr', {
+        style: {
+          border: 'none',
+          borderTop: '1px solid rgba(255,255,255,0.25)',
+          margin: '8px 0'
+        }
+      }),
+      h('strong', { style: { display: 'block', marginBottom: '6px' } }, 'Order Details:'),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Status: ${safeOrder.financial_status} / ${safeOrder.fulfillment_status}`
       ),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Email: ${safeOrder.email}`
       ),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Total: ${safeOrder.total_price !== 'N/A' ? `$${safeOrder.total_price} ${safeOrder.currency}` : '—'}`
       ),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Date: ${
           safeOrder.created_at ? new Date(safeOrder.created_at).toLocaleString() : 'N/A'
         }`
       ),
       h(
+        'p',
+        { className: 'order-sub', style: { color: '#fff' } },
+        `Customer: ${safeOrder.customer_name || 'Guest'}${
+          safeOrder.phone ? ` • ${safeOrder.phone}` : ''
+        }`
+      ),
+      h(
+        'p',
+        { className: 'order-sub', style: { color: '#fff' } },
+        `Tags: ${safeOrder.tags ? safeOrder.tags : '—'}`
+      ),
+      safeOrder.note
+        ? h(
+            'p',
+            { className: 'order-sub', style: { whiteSpace: 'pre-wrap', color: '#fff' } },
+            `Note: ${safeOrder.note}`
+          )
+        : null,
+      h(
+        'div',
+        {
+          style: {
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+            gap: '10px',
+            marginTop: '10px'
+          }
+        },
+        h(
+          'div',
+          { className: 'order-sub', style: { whiteSpace: 'pre-wrap' } },
+          h('strong', null, 'Shipping'),
+          h('div', null, formatAddress(safeOrder.shipping_address))
+        ),
+        h(
+          'div',
+          { className: 'order-sub', style: { whiteSpace: 'pre-wrap' } },
+          h('strong', null, 'Billing'),
+          h('div', null, formatAddress(safeOrder.billing_address))
+        )
+      ),
+      h(
         'div',
         { style: { marginTop: '12px' } },
-        h('strong', null, 'Line items:'),
+        h('hr', {
+          style: {
+            border: 'none',
+            borderTop: '1px solid rgba(255,255,255,0.25)',
+            margin: '12px 0'
+          }
+        }),
+        h('strong', { style: { display: 'block', marginBottom: '10px' } }, 'Line Items:'),
         h(
           'ul',
-          { className: 'orders' },
+          { className: 'orders', style: { gap: '8px', marginBottom: '6px' } },
           (order.line_items || []).map((item, idx) =>
             h(
               'li',
-              { key: `${item.id || idx}-${item.sku || idx}`, className: 'order-row' },
+              {
+                key: `${item.id || idx}-${item.sku || idx}`,
+                className: 'order-row',
+                style: { marginBottom: '6px' }
+              },
               h('p', { className: 'order-id' }, `${item.title || 'Item'} x${item.quantity || 1}`),
               h(
                 'p',
@@ -736,11 +825,6 @@ const OrdersList = ({ orders, loading, error, queried, onSelect }) => {
           'div',
           { className: 'order-meta' },
           h('p', { className: 'order-id' }, order.name || `Order #${order.id}`),
-          h(
-            'p',
-            { className: 'order-sub' },
-            `Email: ${order.email || 'N/A'} • ${order.financial_status || 'status unknown'}`
-          )
         ),
         h(
           'p',
@@ -755,6 +839,56 @@ const OrdersList = ({ orders, loading, error, queried, onSelect }) => {
               ? new Date(order.created_at).toLocaleString()
               : 'N/A'
           }`
+        )
+      )
+    )
+  );
+};
+
+const CreatedOrdersCarousel = ({ orders, onSelect }) => {
+  if (!orders || !orders.length) return null;
+  return h(
+    'div',
+    {
+      style: {
+        display: 'flex',
+        gap: '12px',
+        width: '100%',
+        overflowX: 'auto',
+        padding: '4px 0'
+      }
+    },
+    orders.map((order, idx) =>
+      h(
+        'div',
+        {
+          key: order.id || idx,
+          className: 'order-row',
+          style: {
+            border: '1px solid rgba(255,255,255,0.12)',
+            borderRadius: '6px',
+            padding: '12px',
+            background: 'rgba(255,255,255,0.06)',
+            cursor: onSelect ? 'pointer' : 'default',
+            minWidth: '260px',
+            flex: '0 0 auto'
+          },
+          onClick: () => onSelect && onSelect(order)
+        },
+        h(
+          'div',
+          { className: 'order-meta' },
+          h('p', { className: 'order-id' }, order.name || `Order #${order.id}`),
+          h(
+            'p',
+            { className: 'order-sub' },
+            `Total: ${order.total_price ? `$${order.total_price}` : '—'}`
+          ),
+          h(
+            'p',
+            { className: 'order-sub' },
+            `Date: ${order.created_at ? new Date(order.created_at).toLocaleString() : 'N/A'}`
+          )
         )
       )
     )
@@ -2355,13 +2489,7 @@ function App() {
             ? h(
                 Panel,
                 { title: 'RECENTLY CREATED ORDERS', description: 'Orders you just created' },
-                h(OrdersList, {
-                  orders: createdOrders,
-                  loading: false,
-                  error: '',
-                  queried: true,
-                  onSelect: setSelectedOrder
-                })
+                h(CreatedOrdersCarousel, { orders: createdOrders, onSelect: setSelectedOrder })
               )
             : null,
       selectedOrder
