@@ -1251,6 +1251,7 @@ function App() {
     const hasQuestion = trimmed.includes('?');
     const parsedTags =
       lower.includes('tag') && /tag/i.test(trimmed) ? parseTagList(trimmed) : [];
+    const targetOrders = editTargets.length ? editTargets : orders;
     setEditProcessing(true);
 
     // If tags mentioned but none parsed, ask for them.
@@ -1267,8 +1268,6 @@ function App() {
       setEditInput('');
       return;
     }
-
-    const targetOrders = editTargets.length ? editTargets : orders;
 
     // Apply tag updates if parsed and target orders available.
     if (parsedTags.length && targetOrders.length) {
@@ -2166,6 +2165,7 @@ function App() {
               )
             )
           )
+          ,
         )
       : null,
     h(PageTitle, {
