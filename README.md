@@ -1,4 +1,4 @@
-# Merchant Workbench
+# ShopifAI
 
 Basic Electron application scaffold for the Merchant Workbench desktop app.
 
@@ -18,7 +18,7 @@ Basic Electron application scaffold for the Merchant Workbench desktop app.
    cd ..
    ```
 
-## Environment configuration
+## Environment Configuration
 1. Create `mcp-server/.env` with your Shopify credentials and the port the MCP server should listen on:
    ```bash
    SHOPIFY_ACCESS_TOKEN=your_access_token
@@ -27,7 +27,7 @@ Basic Electron application scaffold for the Merchant Workbench desktop app.
    ```
 2. Keep this file out of version control; it is already ignored by Git.
 
-## Running the app
+## Running the App
 You can run the Electron shell and MCP server separately or together. Run these commands from the repo root:
 
 - Start only the Electron app (uses the MCP HTTP bridge if already running):
@@ -53,15 +53,15 @@ You can run the Electron shell and MCP server separately or together. Run these 
 
 If you run the MCP server manually, ensure it is listening on the `PORT` you configured in `.env` before launching the Electron app.
 
-## MCP server details
+## MCP Server Details
 The included MCP server (launched from `mcp-server/index.js`) is a local clone of [`@akson/mcp-shopify`](https://github.com/antoineschaller/shopify-mcp-server). Keeping the source checked into this repo makes it easy to run locally and apply customizations without publishing a new npm package.
 
-### Local enhancements
+### Local Enhancements
 - Added a `create_orders` tool to generate Shopify orders directly from Claude, complementing the existing order management commands.
 - Expanded `list_orders` filtering to support status, fulfillment state, created-at bounds, email, order ID, order number/name, and customer name.
 - Preserved the HTTP bridge (`npm run start:mcp:http`) so the renderer can talk to the MCP server over HTTP during development, while stdio remains the default for Electron.
 
-### Core tools
+### Core Tools
 The server exposes a Shopify-focused tool set through the Model Context Protocol, including:
 
 - `list_orders`: returns Shopify order data with the filters listed above.
@@ -78,7 +78,7 @@ This build uses Shopify private app tokens (no OAuth redirect) because private a
    - Shop domain (e.g., `your-shop.myshopify.com`)
 4) In the app, click “Connect Shopify” and enter the shop domain and Admin API access token. These are stored securely via keytar (OS keychain) and never exposed to end-users. Env `.env` is only a dev fallback; search/create flows require a connected shop.
 
-## Automation storage
+## State Management & Storage
 Automations are persisted locally in a SQLite file (via `sql.js`, stored as `automations.sqlite` in the project directory). The schema includes: `id`, `label`, `schedule`, `action`, `search_query`, `orders_snapshot` (JSON string), `created_at`, `last_run`, and `next_run`. No external DB service is required.
 
 ## Search date parsing & typo tolerance
