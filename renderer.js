@@ -99,7 +99,9 @@ const Modal = ({ order, onClose, onEdit }) => {
       {
         style: {
           background: 'rgba(255,255,255,0.12)',
-          color: '#e8f4ec',
+          color: '#fff',
+          '--muted': '#fff',
+          fontSize: '16px',
           borderRadius: '6px',
           padding: '20px',
           width: 'min(780px, 90vw)',
@@ -112,91 +114,104 @@ const Modal = ({ order, onClose, onEdit }) => {
         onClick: (e) => e.stopPropagation()
       },
       h(
-        'button',
-        {
-          onClick: onClose,
-          style: {
-            position: 'absolute',
-            top: '10px',
-            right: '10px',
-            background: '#000',
-            borderRadius: '6px',
-            width: '28px',
-            height: '28px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: '#e8f4ec',
-            border: '1px solid rgba(255,255,255,0.15)'
-          }
-        },
-        '✕'
-      ),
-      h(
         'div',
         {
           style: {
             position: 'absolute',
             top: '10px',
-            left: '10px',
+            right: '10px',
             display: 'flex',
-            gap: '8px'
+            alignItems: 'center',
+            gap: '6px'
           }
         },
         h(
-          'button',
+          'a',
           {
-            onClick: onEdit,
+            onClick: (e) => {
+              e.preventDefault();
+              onEdit && onEdit();
+            },
             style: {
-              padding: '6px 10px',
-              borderRadius: '6px',
-              background: 'rgba(149,191,72,0.2)',
-              color: '#0f1b14',
-              border: '1px solid rgba(149,191,72,0.6)',
+              color: 'rgba(149,191,72,0.9)',
+              textDecoration: 'none',
               fontWeight: 700,
+              padding: '4px 8px',
+              borderRadius: '6px',
               cursor: 'pointer'
-            }
+            },
+            href: '#'
           },
           'Edit Order'
+        ),
+        h(
+          'button',
+          {
+            onClick: onClose,
+            style: {
+              width: '28px',
+              height: '28px',
+              background: '#000',
+              borderRadius: '6px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#e8f4ec',
+              border: '1px solid rgba(255,255,255,0.15)'
+            }
+          },
+          '✕'
         )
       ),
-      h('h2', null, order.name || `Order #${order.id}`),
+      h('h2', { style: { marginTop: 0 } }, order.name || `Order #${order.id}`),
+      h('hr', {
+        style: {
+          border: 'none',
+          borderTop: '1px solid rgba(255,255,255,0.25)',
+          margin: '8px 0'
+        }
+      }),
+      h('strong', { style: { display: 'block', marginBottom: '6px' } }, 'Order Details:'),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Status: ${safeOrder.financial_status} / ${safeOrder.fulfillment_status}`
       ),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Email: ${safeOrder.email}`
       ),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Total: ${safeOrder.total_price !== 'N/A' ? `$${safeOrder.total_price} ${safeOrder.currency}` : '—'}`
       ),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Date: ${
           safeOrder.created_at ? new Date(safeOrder.created_at).toLocaleString() : 'N/A'
         }`
       ),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Customer: ${safeOrder.customer_name || 'Guest'}${
           safeOrder.phone ? ` • ${safeOrder.phone}` : ''
         }`
       ),
       h(
         'p',
-        { className: 'order-sub' },
+        { className: 'order-sub', style: { color: '#fff' } },
         `Tags: ${safeOrder.tags ? safeOrder.tags : '—'}`
       ),
       safeOrder.note
-        ? h('p', { className: 'order-sub', style: { whiteSpace: 'pre-wrap' } }, `Note: ${safeOrder.note}`)
+        ? h(
+            'p',
+            { className: 'order-sub', style: { whiteSpace: 'pre-wrap', color: '#fff' } },
+            `Note: ${safeOrder.note}`
+          )
         : null,
       h(
         'div',
@@ -224,14 +239,25 @@ const Modal = ({ order, onClose, onEdit }) => {
       h(
         'div',
         { style: { marginTop: '12px' } },
-        h('strong', null, 'Line items:'),
+        h('hr', {
+          style: {
+            border: 'none',
+            borderTop: '1px solid rgba(255,255,255,0.25)',
+            margin: '12px 0'
+          }
+        }),
+        h('strong', { style: { display: 'block', marginBottom: '10px' } }, 'Line Items:'),
         h(
           'ul',
-          { className: 'orders' },
+          { className: 'orders', style: { gap: '8px', marginBottom: '6px' } },
           (order.line_items || []).map((item, idx) =>
             h(
               'li',
-              { key: `${item.id || idx}-${item.sku || idx}`, className: 'order-row' },
+              {
+                key: `${item.id || idx}-${item.sku || idx}`,
+                className: 'order-row',
+                style: { marginBottom: '6px' }
+              },
               h('p', { className: 'order-id' }, `${item.title || 'Item'} x${item.quantity || 1}`),
               h(
                 'p',
@@ -799,11 +825,6 @@ const OrdersList = ({ orders, loading, error, queried, onSelect }) => {
           'div',
           { className: 'order-meta' },
           h('p', { className: 'order-id' }, order.name || `Order #${order.id}`),
-          h(
-            'p',
-            { className: 'order-sub' },
-            `Email: ${order.email || 'N/A'} • ${order.financial_status || 'status unknown'}`
-          )
         ),
         h(
           'p',
