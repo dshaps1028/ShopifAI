@@ -1853,6 +1853,35 @@ function App() {
     }
   };
 
+  const handleLogout = async () => {
+    if (!window.electronAPI?.oauthLogout) {
+      alert('Logout is not available in this build.');
+      return;
+    }
+    try {
+      setStatus('Signing out…');
+      await window.electronAPI.oauthLogout();
+      const shops = (await window.electronAPI.oauthList()) || [];
+      const activeInfo = (await window.electronAPI.oauthGetActive()) || {};
+      setShopState({
+        shops,
+        active: activeInfo.shop || '',
+        status: 'Not connected'
+      });
+      setOrders([]);
+      setCreatedOrders([]);
+      setProductResults([]);
+      setSelectedOrder(null);
+      setSelectedAutomation(null);
+      setStatus('Ready');
+      alert('Signed out. Connect again when you are ready.');
+    } catch (error) {
+      console.error('Logout error', error);
+      setStatus('Error');
+      alert(error?.message || 'Failed to log out.');
+    }
+  };
+
   const handleAction = () => {};
 
   const handleEditSendMessage = async (text) => {
@@ -3598,6 +3627,25 @@ function App() {
               },
               shopState.active ? 'Reconnect Shopify' : 'Connect Shopify'
             ),
+            shopState.active
+              ? h(
+                  'button',
+                  {
+                    onClick: handleLogout,
+                    style: {
+                      padding: '8px 10px',
+                      borderRadius: '6px',
+                      background: 'transparent',
+                      color: '#e8f4ec',
+                      fontWeight: 700,
+                      letterSpacing: '0.3px',
+                      border: '1px solid rgba(255,255,255,0.35)',
+                      cursor: 'pointer'
+                    }
+                  },
+                  'Log out'
+                )
+              : null,
             h('span', { className: 'order-sub' }, `${shopState.status}`)
           ),
           showScheduleModal
