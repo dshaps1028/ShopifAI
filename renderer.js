@@ -795,7 +795,7 @@ const LogList = ({ entries, onSelect }) =>
     )
   );
 
-const OrdersList = ({ orders, loading, error, queried, onSelect }) => {
+const OrdersList = ({ orders, loading, error, queried, onSelect, onShowAll }) => {
   if (loading) {
     return h('p', { className: 'order-sub' }, 'Loading orders…');
   }
@@ -806,7 +806,29 @@ const OrdersList = ({ orders, loading, error, queried, onSelect }) => {
     return null;
   }
   if (!orders.length) {
-    return h('p', { className: 'order-sub' }, 'No orders match your query.');
+    return h(
+      'div',
+      null,
+      h('p', { className: 'order-sub' }, 'No orders match your query.'),
+      onShowAll
+        ? h(
+            'button',
+            {
+              style: {
+                marginTop: '8px',
+                padding: '8px 10px',
+                borderRadius: '6px',
+                background: '#000',
+                color: '#fff',
+                fontWeight: 700,
+                cursor: 'pointer'
+              },
+              onClick: onShowAll
+            },
+            'Show all orders'
+          )
+        : null
+    );
   }
 
   return h(
@@ -895,11 +917,47 @@ const CreatedOrdersCarousel = ({ orders, onSelect }) => {
   );
 };
 
-const startOfDay = (date) =>
-  new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+// Use UTC day boundaries for Shopify created_at filters to avoid timezone mismatches.
+const getTimeZoneOffsetMinutes = (timeZone, date = new Date()) => {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      timeZoneName: 'longOffset'
+    }).formatToParts(date);
+    const tzName = parts.find((p) => p.type === 'timeZoneName')?.value || '';
+    const match = tzName.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/i);
+    if (match) {
+      const hours = Number(match[1]);
+      const mins = match[2] ? Number(match[2]) : 0;
+      return hours * 60 + (hours >= 0 ? mins : -mins);
+    }
+  } catch (err) {
+    console.warn('[orders] failed to compute timezone offset for', timeZone, err);
+  }
+  return null;
+};
 
-const endOfDay = (date) =>
-  new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+const startOfDay = (date, timeZone) => {
+  if (timeZone) {
+    const offset = getTimeZoneOffsetMinutes(timeZone, date);
+    if (offset !== null) {
+      const utcMs = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+      return new Date(utcMs - offset * 60 * 1000);
+    }
+  }
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+};
+
+const endOfDay = (date, timeZone) => {
+  if (timeZone) {
+    const offset = getTimeZoneOffsetMinutes(timeZone, date);
+    if (offset !== null) {
+      const utcMs = Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+      return new Date(utcMs - offset * 60 * 1000);
+    }
+  }
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+};
 
 const AutomationModalDetail = ({ entry, onClose }) => {
   if (!entry) return null;
@@ -1085,11 +1143,32 @@ const fuzzyNormalizeQuery = (text) => {
   return { normalized, warning };
 };
 
-const deriveDateRangeFromQuery = (query, existingMin, existingMax) => {
+const deriveDateRangeFromQuery = (query, existingMin, existingMax, timeZone) => {
   let created_at_min = existingMin;
   let created_at_max = existingMax;
+  const lc = (query || '').toLowerCase();
+  const wantsAll =
+    /\b(all orders?|everything|show me everything|no filter|no filters|any time|all time)\b/.test(
+      lc
+    );
+  const hasDateCue =
+    /\b(yesterday|today|last|past|week|month|year|day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(
+      lc
+    ) ||
+    /\b\d{4}-\d{2}-\d{2}\b/.test(lc) ||
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/.test(lc);
 
+  if (wantsAll) {
+    created_at_min = undefined;
+    created_at_max = undefined;
+    return { created_at_min, created_at_max, warning: '' };
+  }
+
+  // If the caller explicitly supplied a range, keep it. Otherwise derive a range only when a date cue exists.
   if (created_at_min || created_at_max) {
+    return { created_at_min, created_at_max, warning: '' };
+  }
+  if (!hasDateCue) {
     return { created_at_min, created_at_max, warning: '' };
   }
 
@@ -1102,6 +1181,9 @@ const deriveDateRangeFromQuery = (query, existingMin, existingMax) => {
   const explicitDateMatch =
     query.match(/\b\d{4}-\d{2}-\d{2}\b/) ||
     query.match(/\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+\d{1,2},?\s+\d{4}\b/i);
+  const monthDayMatch = query.match(
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{1,2})(?:,?\s+(\d{4}))?/i
+  );
   const monthOnlyMatch = query.match(
     /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b(?:\s+(\d{4}))?/i
   );
@@ -1110,8 +1192,22 @@ const deriveDateRangeFromQuery = (query, existingMin, existingMax) => {
     const parsed = Date.parse(explicitDateMatch[0]);
     if (!Number.isNaN(parsed)) {
       const parsedDate = new Date(parsed);
-      rangeStart = startOfDay(parsedDate);
-      rangeEnd = endOfDay(parsedDate);
+      rangeStart = startOfDay(parsedDate, timeZone);
+      rangeEnd = endOfDay(parsedDate, timeZone);
+    }
+  } else if (monthDayMatch) {
+    const monthToken = monthDayMatch[1].toLowerCase().slice(0, 3);
+    const dayNum = Number(monthDayMatch[2]);
+    const now = new Date();
+    const effectiveYear = monthDayMatch[3] ? Number(monthDayMatch[3]) : now.getFullYear();
+    const monthIndex =
+      ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(
+        monthToken === 'sep' && monthDayMatch[1].toLowerCase().startsWith('sept') ? 'sep' : monthToken
+      );
+    if (monthIndex !== -1 && !Number.isNaN(dayNum)) {
+      const targetDate = new Date(Date.UTC(effectiveYear, monthIndex, dayNum));
+      rangeStart = startOfDay(targetDate, timeZone);
+      rangeEnd = endOfDay(targetDate, timeZone);
     }
   } else if (monthOnlyMatch) {
     const monthToken = monthOnlyMatch[1].toLowerCase().slice(0, 3);
@@ -1122,8 +1218,10 @@ const deriveDateRangeFromQuery = (query, existingMin, existingMax) => {
     const now = new Date();
     const effectiveYear = monthOnlyMatch[2] ? Number(monthOnlyMatch[2]) : now.getFullYear();
     if (monthIndex !== -1) {
-      rangeStart = new Date(effectiveYear, monthIndex, 1, 0, 0, 0, 0);
-      rangeEnd = new Date(effectiveYear, monthIndex + 1, 0, 23, 59, 59, 999);
+      const start = new Date(Date.UTC(effectiveYear, monthIndex, 1, 0, 0, 0, 0));
+      rangeStart = startOfDay(start, timeZone);
+      const end = new Date(Date.UTC(effectiveYear, monthIndex + 1, 0, 0, 0, 0, 0));
+      rangeEnd = endOfDay(end, timeZone);
     }
   } else if (lcQuery.match(/\b(last|this)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/)) {
     const weekdayMatch = lcQuery.match(/\b(last|this)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/);
@@ -1138,44 +1236,46 @@ const deriveDateRangeFromQuery = (query, existingMin, existingMax) => {
         diff = 7; // force previous week
       }
       const targetDate = new Date(now.getTime() - diff * dayMs);
-      rangeStart = startOfDay(targetDate);
-      rangeEnd = endOfDay(targetDate);
+      rangeStart = startOfDay(targetDate, timeZone);
+      rangeEnd = endOfDay(targetDate, timeZone);
     }
   } else if (lcQuery.includes('last year')) {
     const now = new Date();
-    rangeStart = new Date(now.getFullYear() - 1, 0, 1, 0, 0, 0, 0);
-    rangeEnd = new Date(now.getFullYear(), 0, 0, 23, 59, 59, 999);
+    rangeStart = startOfDay(new Date(Date.UTC(now.getFullYear() - 1, 0, 1, 0, 0, 0, 0)), timeZone);
+    rangeEnd = endOfDay(new Date(Date.UTC(now.getFullYear(), 0, 0, 0, 0, 0, 0)), timeZone);
   } else if (lcQuery.includes('past year')) {
     const now = new Date();
-    rangeStart = startOfDay(new Date(now.getTime() - 365 * dayMs));
-    rangeEnd = endOfDay(now);
+    rangeStart = startOfDay(new Date(now.getTime() - 365 * dayMs), timeZone);
+    rangeEnd = endOfDay(now, timeZone);
   } else if (lcQuery.includes('last month')) {
     const now = new Date();
-    rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
-    rangeEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    const start = new Date(Date.UTC(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0));
+    const end = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 0, 0, 0, 0, 0));
+    rangeStart = startOfDay(start, timeZone);
+    rangeEnd = endOfDay(end, timeZone);
   } else if (
     lcQuery.includes('past month') ||
     /(past|last)\s+30\s+days/.test(lcQuery)
   ) {
     const now = new Date();
-    rangeStart = startOfDay(new Date(now.getTime() - 30 * dayMs));
-    rangeEnd = endOfDay(now);
+    rangeStart = startOfDay(new Date(now.getTime() - 30 * dayMs), timeZone);
+    rangeEnd = endOfDay(now, timeZone);
   } else if (
     lcQuery.includes('last week') ||
     lcQuery.includes('past week') ||
     /(past|last)\s+7\s+days/.test(lcQuery)
   ) {
     const now = new Date();
-    rangeStart = startOfDay(new Date(now.getTime() - 7 * dayMs));
-    rangeEnd = endOfDay(now);
+    rangeStart = startOfDay(new Date(now.getTime() - 7 * dayMs), timeZone);
+    rangeEnd = endOfDay(now, timeZone);
   } else if (lcQuery.includes('yesterday')) {
     const now = new Date();
-    rangeStart = startOfDay(new Date(now.getTime() - dayMs));
-    rangeEnd = endOfDay(new Date(now.getTime() - dayMs));
+    rangeStart = startOfDay(new Date(now.getTime() - dayMs), timeZone);
+    rangeEnd = endOfDay(new Date(now.getTime() - dayMs), timeZone);
   } else if (lcQuery.includes('today')) {
     const now = new Date();
-    rangeStart = startOfDay(now);
-    rangeEnd = endOfDay(now);
+    rangeStart = startOfDay(now, timeZone);
+    rangeEnd = endOfDay(now, timeZone);
   }
 
   return {
@@ -1246,6 +1346,7 @@ function App() {
   const messagesEndRef = useRef(null);
   const editMessagesEndRef = useRef(null);
   const automationMessagesEndRef = useRef(null);
+  const [shopTimeZone, setShopTimeZone] = useState(null);
 
   useEffect(() => {
     if (messagesEndRef.current) {
@@ -1267,6 +1368,25 @@ function App() {
 
   useEffect(() => {
     setStatus('Ready');
+  }, []);
+
+  useEffect(() => {
+    const loadShopInfo = async () => {
+      if (!window.electronAPI?.mcpGetShopInfo) return;
+      try {
+        const res = await window.electronAPI.mcpGetShopInfo();
+        if (res?.ok && res.shop) {
+          const tz = res.shop.iana_timezone || res.shop.timezone || res.shop.time_zone || null;
+          if (tz) {
+            setShopTimeZone(tz);
+            console.log('[orders] shop timezone set to', tz);
+          }
+        }
+      } catch (err) {
+        console.error('[orders] failed to load shop info', err);
+      }
+    };
+    loadShopInfo();
   }, []);
 
   useEffect(() => {
@@ -1630,18 +1750,17 @@ function App() {
       try {
         console.log('[automation] received automation to run:', auto);
         let workingOrders = Array.isArray(auto.orders_snapshot) ? auto.orders_snapshot : [];
-        if (auto.search_query && window.electronAPI?.codexOrders && window.electronAPI?.mcpListOrders) {
-          try {
-            const parsed = await window.electronAPI.codexOrders(auto.search_query);
-            const params = parsed?.data || {};
-            const payload = { ...params };
-            if (!payload.status) payload.status = 'any';
-            const result = await window.electronAPI.mcpListOrders(payload);
-            if (result?.ok && Array.isArray(result.orders)) {
-              workingOrders = result.orders;
-            }
-          } catch (err) {
-            console.error('[automation] search step failed, falling back to snapshot:', err);
+        if (auto.search_query && window.electronAPI?.openaiChatWithFunctions && window.electronAPI?.mcpListOrders) {
+      try {
+        const { params } = await callOpenAIListOrders(auto.search_query);
+        const payload = { ...params };
+        if (!payload.status) payload.status = 'any';
+        const result = await window.electronAPI.mcpListOrders(payload);
+        if (result?.ok && Array.isArray(result.orders)) {
+          workingOrders = result.orders;
+        }
+      } catch (err) {
+        console.error('[automation] search step failed, falling back to snapshot:', err);
           }
         }
 
@@ -1725,6 +1844,204 @@ function App() {
     return Array.from(tags);
   };
 
+  const openaiListOrdersFunction = [
+    {
+      name: 'list_orders',
+      description: 'Fetch Shopify orders matching filters',
+      parameters: {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 50, default: 5 },
+          status: { type: 'string', nullable: true },
+          financial_status: { type: 'string', nullable: true },
+          fulfillment_status: { type: 'string', nullable: true },
+          created_at_min: { type: 'string', nullable: true },
+          created_at_max: { type: 'string', nullable: true },
+          email: { type: 'string', nullable: true },
+          order_id: { type: 'string', nullable: true },
+          order_number: { type: 'string', nullable: true },
+          customer_name: { type: 'string', nullable: true },
+          sku: { type: 'string', nullable: true }
+        }
+      }
+    },
+    {
+      name: 'search_products',
+      description: 'Search for products by title to find matching SKUs/variants',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          limit: { type: 'integer', minimum: 1, maximum: 50, default: 10 }
+        },
+        required: ['query']
+      }
+    }
+  ];
+
+  const callOpenAIListOrders = async (queryText) => {
+    if (!window.electronAPI?.openaiChatWithFunctions) {
+      throw new Error('OpenAI function-calling helper is not available.');
+    }
+    const trimmed = (queryText || '').trim();
+    const hasDateCue =
+      /\b(yesterday|today|last|past|week|month|year|day|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(
+        trimmed
+      ) ||
+      /\b\d{4}-\d{2}-\d{2}\b/.test(trimmed) ||
+      /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i.test(trimmed);
+    const wantsAll =
+      /\b(all orders?|everything|show me everything|no filter|no filters|any time|all time)\b/i.test(
+        trimmed
+      );
+    const messages = [
+      {
+        role: 'system',
+        content:
+          'Map Shopify order requests to the list_orders function. Use a sensible limit (default 5) unless the user asks for a different count. ' +
+          'If no order status is specified, use status=any. If the user provides payment/fulfillment states, pass them through. ' +
+          'If the user mentions a timeframe, provide created_at_min/max in ISO8601. If the user mentions email, order id/number/name, or customer name, include them. ' +
+          'Only set sku when the user explicitly provides a SKU/variant/product code (or says "SKU"/"variant"/"product code"); do not treat generic product names as SKUs. ' +
+          'If the user gives a product name (e.g., "snowboards", "boots"), call search_products to find matching variants/SKUs, then use those SKUs to filter orders via list_orders. ' +
+          'If the user asks for all orders, do not add date filters. Do not change filters unless the user requests it. ' +
+          'Do not invent IDs or emails.'
+      },
+      { role: 'user', content: trimmed || 'Find recent orders' }
+    ];
+
+    const response = await window.electronAPI.openaiChatWithFunctions({
+      messages,
+      functions: openaiListOrdersFunction,
+      model: 'gpt-4o-mini',
+      temperature: 0
+    });
+
+    if (!response?.ok) {
+      throw new Error(response?.error || 'OpenAI function call failed');
+    }
+    if (!response.called || !response.called.args) {
+      throw new Error('OpenAI did not return function arguments');
+    }
+    if (response.called.name === 'search_products') {
+      // Prefer direct search results; otherwise fall back to list_products and filter locally.
+      let products = (response.called.result && response.called.result.products) || [];
+
+      if ((!products || products.length === 0) && window.electronAPI?.mcpListProducts) {
+        const listResult = await window.electronAPI.mcpListProducts({ limit: 100 });
+        if (listResult?.ok && Array.isArray(listResult.products)) {
+          const expandTerms = (tokens) => {
+            const variants = new Set();
+            tokens.forEach((t) => {
+              const term = t.toLowerCase();
+              variants.add(term);
+              if (term.endsWith('ies')) variants.add(term.slice(0, -3) + 'y');
+              if (term.endsWith('es')) variants.add(term.slice(0, -2));
+              if (term.endsWith('s')) variants.add(term.slice(0, -1));
+              if (!term.endsWith('s') && term.length > 2) variants.add(`${term}s`);
+            });
+            return Array.from(variants).filter((v) => v.length >= 3);
+          };
+
+          const terms = expandTerms(
+            (trimmed || '').split(/\s+/).filter((t) => t.trim().length >= 3)
+          );
+          products = listResult.products.filter((p) => {
+            const title = (p.title || p.handle || '').toLowerCase();
+            const productType = (p.product_type || '').toLowerCase();
+            const variantTitles = (p.variants || []).map((v) => (v.title || '').toLowerCase());
+            return terms.some(
+              (t) =>
+                title.includes(t) ||
+                productType.includes(t) ||
+                variantTitles.some((vt) => vt.includes(t))
+            );
+          });
+        }
+      }
+
+      const firstProduct = Array.isArray(products) ? products[0] : null;
+      const firstVariant =
+        firstProduct && Array.isArray(firstProduct.variants) && firstProduct.variants.length
+          ? firstProduct.variants[0]
+          : null;
+      const sku = firstVariant?.sku || firstProduct?.sku || null;
+      if (!sku) {
+        throw new Error('No matching products found for that query.');
+      }
+      return { params: { sku, status: 'any', limit: 50 }, meta: { hasDateCue, wantsAll } };
+    }
+    const args = { ...response.called.args };
+    if (wantsAll) {
+      delete args.created_at_min;
+      delete args.created_at_max;
+      args.limit = args.limit || 250;
+    }
+    if (!args.status) args.status = 'any';
+    if (args.limit === undefined || args.limit === null) {
+      args.limit = hasDateCue ? 100 : 150;
+    }
+    return { params: args, meta: { hasDateCue, wantsAll } };
+  };
+
+  const openaiDraftFunctions = [
+    {
+      name: 'draft_order_intent',
+      description: 'Plan the next draft order action and capture structured state',
+      parameters: {
+        type: 'object',
+        properties: {
+          reply: { type: 'string' },
+          action: { type: 'string', enum: ['none', 'search', 'update_draft', 'submit'] },
+          search_query: { type: 'string', nullable: true },
+          line_items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                sku: { type: 'string', nullable: true },
+                variant_id: { type: 'integer', nullable: true },
+                quantity: { type: 'integer', nullable: true }
+              }
+            }
+          },
+          shipping_address: {
+            type: 'object',
+            nullable: true,
+            properties: {
+              name: { type: 'string', nullable: true },
+              address1: { type: 'string', nullable: true },
+              address2: { type: 'string', nullable: true },
+              city: { type: 'string', nullable: true },
+              province: { type: 'string', nullable: true },
+              zip: { type: 'string', nullable: true },
+              country: { type: 'string', nullable: true },
+              phone: { type: 'string', nullable: true }
+            }
+          },
+          billing_address: {
+            type: 'object',
+            nullable: true,
+            properties: {
+              name: { type: 'string', nullable: true },
+              address1: { type: 'string', nullable: true },
+              address2: { type: 'string', nullable: true },
+              city: { type: 'string', nullable: true },
+              province: { type: 'string', nullable: true },
+              zip: { type: 'string', nullable: true },
+              country: { type: 'string', nullable: true },
+              phone: { type: 'string', nullable: true }
+            }
+          },
+          email: { type: 'string', nullable: true },
+          note: { type: 'string', nullable: true },
+          confirm_submit: { type: 'boolean', nullable: true }
+        },
+        required: ['reply', 'action'],
+        additionalProperties: false
+      }
+    }
+  ];
+
   const handleFetchOrders = async (queryParams = {}) => {
     if (!requireShopConnection()) return;
     setOrdersLoading(true);
@@ -1740,17 +2057,8 @@ function App() {
         throw new Error('MCP client is not available');
       }
 
-      const normalizedLimit =
-        queryParams.limit !== undefined
-          ? Math.max(1, Math.min(250, Number(queryParams.limit)))
-          : undefined;
-
       const requestPayload = { ...queryParams };
-      if (normalizedLimit && !Number.isNaN(normalizedLimit)) {
-        requestPayload.limit = normalizedLimit;
-      } else {
-        delete requestPayload.limit;
-      }
+      let filterParams = { ...requestPayload };
 
       console.log('[orders] list_orders payload:', JSON.stringify(requestPayload, null, 2));
       const result = await window.electronAPI.mcpListOrders(requestPayload);
@@ -1759,7 +2067,9 @@ function App() {
       }
 
       const hadDateFilter = !!(requestPayload.created_at_min || requestPayload.created_at_max);
-      let loaded = result.orders || [];
+      let widenedNotice = '';
+      const rawLoaded = result.orders || [];
+      let loaded = rawLoaded;
       console.log('[orders] list_orders result count:', Array.isArray(loaded) ? loaded.length : 0);
       if (Array.isArray(loaded)) {
         loaded.forEach((order, idx) => {
@@ -1767,133 +2077,19 @@ function App() {
         });
       }
 
-      // Fallback: if a date filter returned nothing, retry without dates to avoid over-restricting
-      if (hadDateFilter && Array.isArray(loaded) && loaded.length === 0) {
-        const fallbackPayload = { ...requestPayload };
-        delete fallbackPayload.created_at_min;
-        delete fallbackPayload.created_at_max;
-        console.log(
-          '[orders] date-filtered query returned 0 results, retrying without date range:',
-          JSON.stringify(fallbackPayload, null, 2)
-        );
-        const retry = await window.electronAPI.mcpListOrders(fallbackPayload);
-        if (retry?.ok && Array.isArray(retry.orders)) {
-          loaded = retry.orders;
-          console.log(
-            '[orders] fallback result count:',
-            Array.isArray(loaded) ? loaded.length : 0
-          );
-        }
-      }
-
-      // If we queried by name/order_number, avoid client-side filters that could strip it
-      if (queryParams.name) {
-        setOrders(loaded);
-        setSelectedOrder(null);
-        setStatus('Ready');
-        return;
-      }
-
-      // Client-side guard: enforce exact matches when provided
-      if (queryParams.order_id) {
-        const target = String(queryParams.order_id).trim().toLowerCase();
-        loaded = loaded.filter(
-          (o) =>
-            String(o.id).toLowerCase() === target ||
-            (o.admin_graphql_api_id &&
-              String(o.admin_graphql_api_id).toLowerCase().endsWith(target))
-        );
-      }
-
-      if (queryParams.order_number) {
-        const needle = String(queryParams.order_number).trim().toLowerCase().replace(/^#/, '');
-        loaded = loaded.filter((o) => {
-          const name = o.name ? String(o.name).toLowerCase().replace(/^#/, '') : '';
-          const num =
-            o.order_number !== undefined ? String(o.order_number).toLowerCase().replace(/^#/, '') : '';
-          return (
-            name === needle ||
-            num === needle ||
-            (name && name.includes(needle)) ||
-            (num && num.includes(needle))
-          );
-        });
-      }
-
-      // Client-side email filter (Shopify list endpoint doesn't filter by email directly)
-      if (queryParams.email) {
-        const target = String(queryParams.email).trim().toLowerCase();
-        loaded = loaded.filter(
-          (o) =>
-            (o.email && String(o.email).toLowerCase() === target) ||
-            (o.customer && o.customer.email && String(o.customer.email).toLowerCase() === target)
-        );
-      }
-
-      // Client-side financial status filter to guard against parsing mismatches
-      if (queryParams.financial_status) {
-        const target = String(queryParams.financial_status).toLowerCase();
-        loaded = loaded.filter(
-          (o) => o.financial_status && String(o.financial_status).toLowerCase() === target
-        );
-      }
-
-      // Client-side order status filter
-      if (queryParams.status) {
-        const target = String(queryParams.status).toLowerCase();
-        if (target !== 'any') {
-          loaded = loaded.filter((o) => o.status && String(o.status).toLowerCase() === target);
-        }
-      }
-
-      if (queryParams.sku) {
-        const target = String(queryParams.sku).trim().toLowerCase();
-        loaded = loaded.filter(
-          (o) =>
-            Array.isArray(o.line_items) &&
-            o.line_items.some(
-              (item) => item.sku && String(item.sku).trim().toLowerCase() === target
-            )
-        );
-      }
-
-      // Client-side date range filter (created_at)
-      if (queryParams.created_at_min || queryParams.created_at_max) {
-        const minMs = queryParams.created_at_min ? Date.parse(queryParams.created_at_min) : null;
-        const maxMs = queryParams.created_at_max ? Date.parse(queryParams.created_at_max) : null;
-        loaded = loaded.filter((o) => {
-          const ts = o.created_at ? Date.parse(o.created_at) : null;
-          if (ts === null || Number.isNaN(ts)) return false;
-          if (minMs !== null && ts < minMs) return false;
-          if (maxMs !== null && ts > maxMs) return false;
-          return true;
-        });
-      }
+      // No auto-widening; keep the model/user filters intact. If zero, show zero.
 
       console.log('[orders] final count after client filters:', Array.isArray(loaded) ? loaded.length : 0);
 
-      let finalOrders = loaded;
-      if (window.electronAPI?.ordersCacheSave && window.electronAPI?.ordersCacheList) {
-        try {
-          const label = lastQueryLabel || (nlQuery && nlQuery.trim()) || 'Orders search';
-          await window.electronAPI.ordersCacheSave({
-            label,
-            search_query: label,
-            orders: loaded
-          });
-          const savedRows = (await window.electronAPI.ordersCacheList(1)) || [];
-          const latest = savedRows[0];
-          if (latest && Array.isArray(latest.orders)) {
-            finalOrders = latest.orders;
-          }
-        } catch (persistError) {
-          console.error('[orders] cache persist failed:', persistError);
-        }
-      }
-
-      setOrders(finalOrders);
+      setOrders(loaded);
       setSelectedOrder(null);
-      setStatus('Ready');
+      if (hadDateFilter && Array.isArray(loaded) && loaded.length === 0) {
+        setStatus('No results');
+        setOrdersError('No orders found for that date range.');
+      } else {
+        setStatus('Ready');
+        setOrdersError('');
+      }
 
     } catch (error) {
       setOrdersError(error.message || 'Failed to fetch orders');
@@ -1908,6 +2104,11 @@ function App() {
     setSchedulerProcessing(false);
     setStatus('Ready');
     setShowScheduleModal(true);
+  };
+
+  const handleShowAllOrders = async () => {
+    await handleFetchOrders({ status: 'any', limit: 250 });
+    setLastQueryLabel('All orders');
   };
 
   const handleAnalyzeOrders = async () => {
@@ -2281,7 +2482,6 @@ function App() {
     setSchedulerProcessing(true);
     try {
       const assistantMessages = [];
-      let summaryParts = [];
       const draft = {
         line_items:
           createSku || createVariantId
@@ -2298,23 +2498,37 @@ function App() {
         shipping_address: shippingAddress || null,
         billing_address: billingAddress || null
       };
-      const result = await window.electronAPI.codexOrderComposer(trimmed, draft);
-      if (!result?.ok) {
-        console.error('[order-chat] codexOrderComposer error result:', result);
-        throw new Error(result?.error || 'Codex order composer failed');
+      if (!window.electronAPI?.openaiChatWithFunctions) {
+        throw new Error('OpenAI function calling is not available.');
       }
-      const raw = result.data || {};
-      const data =
-        typeof raw === 'string'
-          ? (() => {
-              try {
-                return JSON.parse(raw);
-              } catch {
-                return { reply: raw };
-              }
-            })()
-          : raw;
-      console.log('[order-chat] codex composer data:', data);
+      const response = await window.electronAPI.openaiChatWithFunctions({
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are an order creation assistant. Maintain a draft order from conversation and always call draft_order_intent with your structured state. ' +
+              'Use action=search when you need product info (provide search_query). ' +
+              'Use action=update_draft when updating the draft with line_items/email/note/shipping/billing. ' +
+              'Capture shipping_address and billing_address as structured objects (name, address1, address2, city, province, zip, country, phone); set them to null when not provided. ' +
+              'If required details are missing (SKU or variant, quantity, customer email, shipping/billing info), ask for them explicitly before attempting to submit and wait for the answer. ' +
+              'Before submitting, summarize the draft (items, qty, SKU/variant) and ask the user to confirm. ' +
+              'Use action=submit only after the user has clearly confirmed creation; set confirm_submit=true in that case. ' +
+              'Respond with a helpful reply in reply. Always include every field in the schema; when a field is not applicable, set it to null (or [] for line_items).'
+          },
+          { role: 'user', content: `Current draft JSON: ${JSON.stringify(draft || {})}` },
+          { role: 'user', content: trimmed }
+        ],
+        functions: openaiDraftFunctions,
+        model: 'gpt-4o-mini',
+        temperature: 0
+      });
+
+      if (!response?.ok) {
+        throw new Error(response?.error || 'OpenAI order composer failed');
+      }
+
+      const data = response.called?.args || {};
+      console.log('[order-chat] openai draft args:', data);
       if (data.email) {
         setCreateEmail(String(data.email).trim());
       }
@@ -2327,7 +2541,9 @@ function App() {
       if (data.note && String(data.note).trim()) {
         setSchedulerQuery(String(data.note).trim());
       }
-      let combinedReply = data.reply ? String(data.reply) : '';
+      const replyContent =
+        (response.message && (response.message.content || response.message.text)) || '';
+      let combinedReply = data.reply ? String(data.reply) : replyContent;
       setShowScheduleModal(true);
       if (data.action === 'search') {
         await handleProductSearch(data.search_query);
@@ -2400,7 +2616,7 @@ function App() {
         });
       }
     } catch (error) {
-      setOrdersError(error.message || 'Codex order composer failed');
+      setOrdersError(error.message || 'OpenAI order composer failed');
       setChatMessages((prev) => [
         ...prev,
         { role: 'assistant', text: `Sorry, I hit an error: ${error?.message || 'Unknown error'}` }
@@ -2420,13 +2636,13 @@ function App() {
     addLog({ count: orders.length, label });
   };
 
-  const handleCodexOrders = async () => {
+  const handleOpenAIFunctionOrders = async () => {
     if (!requireShopConnection()) return;
     if (!nlQuery.trim()) {
       return;
     }
-    if (!window.electronAPI?.codexOrders) {
-      setOrdersError('Codex SDK is not available in this build.');
+    if (!window.electronAPI?.openaiChatWithFunctions) {
+      setOrdersError('OpenAI function calling is not available in this build.');
       setStatus('Error');
       return;
     }
@@ -2442,13 +2658,8 @@ function App() {
         if (trimmedQuery) {
           setLastQueryLabel(trimmedQuery);
         }
-        const codexResponse = await window.electronAPI.codexOrders(nlQuery.trim());
-        if (!codexResponse?.ok) {
-          throw new Error(codexResponse?.error || 'Codex returned an error');
-        }
-
-        const params = codexResponse.data || {};
-        console.log('[orders] codex params:', params);
+        const { params, meta } = await callOpenAIListOrders(nlQuery.trim());
+        console.log('[orders] openai function params:', params, 'meta:', meta);
       const paymentStatuses = [
         'authorized',
         'pending',
@@ -2549,10 +2760,13 @@ function App() {
       }
 
       // Heuristic: extract a line-item title fragment (inexact match)
+      // Always derive date range from the user query (ignore model-provided dates to avoid stale ranges).
+      // Always derive date range from user text for relative dates to avoid stale/model-supplied ranges.
       const { created_at_min, created_at_max } = deriveDateRangeFromQuery(
-        nlQuery,
-        params.created_at_min,
-        params.created_at_max
+        meta?.hasDateCue ? nlQuery : '',
+        undefined,
+        undefined,
+        shopTimeZone
       );
 
       const requestPayload = {
@@ -2593,7 +2807,7 @@ function App() {
 
       await handleFetchOrders(cleanedPayload);
     } catch (error) {
-      setOrdersError(error.message || 'Failed to process Codex request');
+      setOrdersError(error.message || 'Failed to process OpenAI request');
       setStatus('Error');
     } finally {
       setNlProcessing(false);
@@ -2990,7 +3204,7 @@ function App() {
         h(
           ActionButton,
           {
-            onClick: handleCodexOrders,
+            onClick: handleOpenAIFunctionOrders,
             disabled: nlProcessing || ordersLoading || !nlQuery.trim()
           },
           nlProcessing ? 'Working…' : 'Search Shopify'
@@ -3058,7 +3272,8 @@ function App() {
         loading: ordersLoading,
         error: ordersError,
         queried: hasQueriedOrders,
-        onSelect: setSelectedOrder
+        onSelect: setSelectedOrder,
+        onShowAll: handleShowAllOrders
       })
     )
   )

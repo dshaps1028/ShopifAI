@@ -2,10 +2,12 @@ const { contextBridge, ipcRenderer } = require('electron');
 const { pathToFileURL } = require('url');
 const fs = require('fs');
 const path = require('path');
+const OpenAI = require('openai');
 
 let codexThreadPromise;
 let codexInitError = '';
 let mcpClientPromise;
+let openaiClient;
 
 const loadLocalEnv = () => {
   const envPath = path.join(__dirname, '.env.local');
@@ -24,7 +26,12 @@ const loadLocalEnv = () => {
 };
 
 loadLocalEnv();
-console.log('[preload] .env.local loaded (if present), CODEX_API_KEY set:', !!process.env.CODEX_API_KEY);
+console.log(
+  '[preload] .env.local loaded (if present), CODEX_API_KEY set:',
+  !!process.env.CODEX_API_KEY,
+  'OPENAI_API_KEY set:',
+  !!process.env.OPENAI_API_KEY
+);
 
 const loadMcpEnv = () => {
   const envPath = path.join(__dirname, 'mcp-server', '.env');
@@ -59,6 +66,19 @@ const hydrateShopCredentials = async () => {
   } catch (error) {
     console.error('[preload] Failed to load active shop credentials', error);
   }
+};
+
+const getOpenAIClient = () => {
+  if (openaiClient) return openaiClient;
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not set');
+  }
+  openaiClient = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    // Electron preload runs in a browser-like context; explicitly allow if key is provided locally.
+    dangerouslyAllowBrowser: true
+  });
+  return openaiClient;
 };
 
 const getCodexThread = async () => {
@@ -509,10 +529,103 @@ const mcpListProducts = async (params) => {
   }
 };
 
+const mcpGetShopInfo = async () => {
+  try {
+    await hydrateShopCredentials();
+    const { client } = await getMcpClient();
+    const result = await client.callTool({ name: 'get_shop_info', arguments: {} });
+    const info =
+      result.structuredContent?.shop ||
+      (result.content || [])
+        .flatMap((item) => item.json?.shop || item.text?.shop || [])
+        .find(Boolean) ||
+      result.structuredContent ||
+      null;
+    return { ok: true, shop: info };
+  } catch (error) {
+    console.error('[preload] MCP get_shop_info failed:', error);
+    return { ok: false, error: error?.message || 'MCP get_shop_info failed' };
+  }
+};
+
 const saveOrdersResult = (payload) => ipcRenderer.invoke('orders:saveResult', payload);
 const listSavedOrders = (limit = 1) => ipcRenderer.invoke('orders:list', limit);
 const saveCreatedOrders = (payload) => ipcRenderer.invoke('ordersCreated:save', payload);
 const listCreatedOrders = (limit = 1) => ipcRenderer.invoke('ordersCreated:list', limit);
+
+const openaiFunctionExecutors = {
+  list_orders: mcpListOrders,
+  create_order: mcpCreateOrder,
+  update_order: mcpUpdateOrder,
+  search_products: mcpSearchProducts,
+  list_products: mcpListProducts,
+  draft_order_intent: async (args) => ({ ok: true, data: args || {} })
+};
+
+const openaiChatWithFunctions = async ({
+  messages = [],
+  functions = [],
+  model = 'gpt-4o-mini',
+  temperature = 0,
+  forceFunction
+} = {}) => {
+  try {
+    const client = getOpenAIClient();
+    const completion = await client.chat.completions.create({
+      model,
+      messages,
+      functions,
+      function_call: forceFunction ? { name: forceFunction } : 'auto',
+      temperature
+    });
+
+    const choice = completion?.choices?.[0];
+    const message = choice?.message;
+    if (!message) {
+      return { ok: false, error: 'No completion message returned' };
+    }
+
+    if (message.function_call) {
+      const { name, arguments: argsJson } = message.function_call;
+      const executor = openaiFunctionExecutors[name];
+      if (!executor) {
+        return { ok: false, error: `Unsupported function: ${name}` };
+      }
+
+      let args = {};
+      try {
+        args = argsJson ? JSON.parse(argsJson) : {};
+      } catch {
+        return { ok: false, error: 'Invalid function_call arguments JSON' };
+      }
+
+      const fnResult = await executor(args);
+      const followup = await client.chat.completions.create({
+        model,
+        messages: [
+          ...messages,
+          message,
+          { role: 'function', name, content: JSON.stringify(fnResult) }
+        ]
+      });
+
+      return {
+        ok: true,
+        message: followup?.choices?.[0]?.message || null,
+        called: { name, args, result: fnResult }
+      };
+    }
+
+    if (forceFunction && forceFunction !== '') {
+      return { ok: false, error: 'Model did not return a function call when one was required.' };
+    }
+
+    return { ok: true, message };
+  } catch (error) {
+    console.error('[preload] openaiChatWithFunctions failed:', error);
+    return { ok: false, error: error?.message || 'OpenAI function call failed' };
+  }
+};
 
 const automationRunHandlers = new Set();
 ipcRenderer.on('automation:run', (_event, payload) => {
@@ -551,6 +664,8 @@ const api = {
   ordersCacheList: listSavedOrders,
   ordersCreatedSave: saveCreatedOrders,
   ordersCreatedList: listCreatedOrders,
+  openaiChatWithFunctions,
+  mcpGetShopInfo,
   mcpListOrders,
   mcpCreateOrder,
   mcpUpdateOrder,
