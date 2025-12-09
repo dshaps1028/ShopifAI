@@ -267,6 +267,45 @@ const codexReport = async (prompt, orders = [], mode = 'trends') => {
   }
 };
 
+const codexAutomation = async (prompt, defaults = {}) => {
+  if (codexInitError) {
+    return { ok: false, error: codexInitError };
+  }
+  try {
+    const thread = await getCodexThread();
+    const schema = {
+      type: 'object',
+      properties: {
+        schedule: { type: 'string' },
+        interval_days: { type: 'integer', nullable: true },
+        start_at: { type: 'string', nullable: true },
+        end_at: { type: 'string', nullable: true },
+        label: { type: 'string', nullable: true },
+        action: { type: 'string', nullable: true },
+        search_query: { type: 'string', nullable: true },
+        confirm: { type: 'boolean', nullable: true }
+      },
+      required: ['schedule'],
+      additionalProperties: false
+    };
+    const system =
+      'You convert a natural-language automation request into a normalized schedule payload. ' +
+      'Return a short schedule string (e.g., "every 7 days", "every Monday at 09:00"), an integer interval_days when possible, ' +
+      'optional ISO start_at/end_at, and any label/action/search_query hints. Do not invent contacts or PII.';
+    const turn = await thread.run(
+      [
+        { type: 'text', text: system },
+        { type: 'text', text: `User request: ${prompt}` },
+        { type: 'text', text: `Defaults: ${JSON.stringify(defaults || {})}` }
+      ],
+      { outputSchema: schema }
+    );
+    return { ok: true, data: turn.finalResponse };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Codex automation parse failed' };
+  }
+};
+
 const codexOrderComposer = async (prompt, draft) => {
   if (codexInitError) {
     return { ok: false, error: codexInitError };
@@ -718,6 +757,7 @@ const api = {
   codexOrders,
   codexAnalyzeOrders,
   codexReport,
+  codexAutomation,
   codexOrderComposer,
   oauthStart: (shop) => ipcRenderer.invoke('oauth:start', shop),
   oauthList: () => ipcRenderer.invoke('oauth:list'),
