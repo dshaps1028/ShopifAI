@@ -26,6 +26,12 @@ Basic Electron application scaffold for the Merchant Workbench desktop app.
    PORT=3000
    ```
 2. Keep this file out of version control; it is already ignored by Git.
+3. Optionally create `.env.local` in the repo root for AI keys (ignored by Git). Example:
+   ```bash
+   CODEX_API_KEY=your_codex_key
+   OPENAI_API_KEY=your_openai_key
+   ```
+   Codex remains supported; `OPENAI_API_KEY` enables the new OpenAI function-calling helper exposed from `preload.js`.
 
 ## Running the App
 You can run the Electron shell and MCP server separately or together. Run these commands from the repo root:
@@ -54,7 +60,7 @@ The UI currently relies on these MCP tools:
 - `list_orders`: fetches orders with filters (status, fulfillment, date range, email, ID/number/name, SKU).
 - `create_order`: creates a single order with line items and customer details.
 - `update_order`: used by the bulk/single edit flows to update notes, tags, email/phone.
-- `search_products`: finds products/variants by query (used for SKUs/variant IDs).
+- `search_products`: finds products/variants by query (contains-style token search across title/type/variants/SKUs, with fallbacks to legacy title search and a final local substring filter).
 - `list_products`: fallback listing of products/variants when no query is provided.
 
 The full tool catalog (including customer and analytics helpers) is documented in `mcp-server/TOOLS.md`.
@@ -91,7 +97,16 @@ Automations are persisted locally in a SQLite file (via `sql.js`, stored as `aut
 - Logging: prompts/responses are logged in the console (`[ai-search]`), and failures show an error in the panel.
 
 ## Search Date Parsing & Typo Tolerance
-The order search bar accepts natural language date phrases: explicit dates (`2025-09-12`), month ranges (`September 2025`), relative ranges (`yesterday`, `last week`, `past month`, `last year`), and weekdays (`last Sunday`). A lightweight fuzzy pass (Levenshtein distance ≤ 2 against known date terms) normalizes minor misspellings (e.g., “yesterdy” → “yesterday”). When a fuzzy correction is applied, a warning string is returned alongside the derived date range so the UI can surface it if desired. This helps avoid overly broad results when users mistype date phrases.
+The order search bar accepts natural language date phrases: explicit dates (`2025-09-12`), month ranges (`September 2025`), relative ranges (`yesterday`, `last week`, `past month`, `last year`), and weekdays (`last Sunday`). A lightweight fuzzy pass (Levenshtein distance ≤ 2 against known date terms) normalizes minor misspellings (e.g., “yesterdy” → “yesterday”). When a fuzzy correction is applied, a warning string is returned alongside the derived date range so the UI can surface it if desired. Date ranges are derived using the shop’s timezone (when available) and are no longer auto-widened; zero results stay zero instead of silently broadening the query.
+
+## AI Flows (Function Calling)
+- Order search: NL queries route through OpenAI function calling (`list_orders` / `search_products`), which invokes our local MCP server tools over stdio. The model is free to call `search_products` when a product name is present; results are used to filter orders by SKU.
+- Order creation chat: Uses the `draft_order_intent` function to drive product search (`search` action), draft updates, and submit confirmation. Product search in this flow benefits from the improved contains-style matching and local fallback described above.
+
+## Product Search Resilience
+- Contains-style token search via Shopify `products/search.json` (`title:*token*` with OR across tokens, after stripping filler words like “name/containing/with”).
+- Fallback to legacy `products.json?title=…`.
+- Final fallback: broaden to a list and filter client-side across title/handle/product_type/variant titles/SKUs for substring matches.
 
 ## Project Structure
 - `main.js`: Electron main process that creates the browser window.

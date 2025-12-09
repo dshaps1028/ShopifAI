@@ -713,21 +713,58 @@ class ShopifyMCPServer {
 	}
 
 	async searchProducts(args) {
-		const data = await this.shopifyRequest(
-			`products.json?title=${encodeURIComponent(args.query)}&limit=${args.limit || 10}&fields=id,title,handle,product_type,vendor,status,variants`
-		);
+		const rawQuery = (args.query || '').trim();
+		const limit = args.limit || 10;
+		const stopWords = new Set(['name', 'named', 'containing', 'with', 'product', 'products', 'a', 'an', 'the']);
+		const tokens = rawQuery
+			.split(/\s+/)
+			.map((t) => t.trim())
+			.filter((t) => t.length >= 2 && !stopWords.has(t.toLowerCase()));
 
-		if (data.products.length === 0) {
-			// Try searching in product listings
-			const searchData = await this.shopifyRequest(
-				`products/search.json?query=${encodeURIComponent(args.query)}&limit=${args.limit || 10}`
+		// Build a contains-style search query for Shopify search API (e.g., title:*surfboard* OR title:*foam*).
+		const searchTerms = tokens.length ? tokens : rawQuery ? [rawQuery] : [];
+		const searchQuery =
+			searchTerms.length > 0
+				? searchTerms.map((t) => `title:*${t}*`).join(' OR ')
+				: 'title:*';
+
+		// Prefer the search API for fuzzy matching; fall back to the legacy title filter, then to a broad list filter.
+		let data = await this.shopifyRequest(
+			`products/search.json?query=${encodeURIComponent(searchQuery)}&limit=${limit}`
+		).catch(() => null);
+
+		if (!data || !Array.isArray(data.products) || data.products.length === 0) {
+			data = await this.shopifyRequest(
+				`products.json?title=${encodeURIComponent(rawQuery)}&limit=${limit}&fields=id,title,handle,product_type,vendor,status,variants`
 			).catch(() => null);
-			if (searchData && searchData.products) {
-				data.products = searchData.products;
+		}
+
+		let products = Array.isArray(data?.products) ? data.products : [];
+
+		// Final fallback: pull a broader list and filter client-side for substring matches.
+		if (products.length === 0) {
+			const listFallback = await this.shopifyRequest(
+				`products.json?limit=${Math.max(limit, 50)}&fields=id,title,handle,product_type,vendor,status,variants`
+			).catch(() => null);
+			if (listFallback?.products) {
+				const lowerTokens = searchTerms.map((t) => t.toLowerCase());
+				products = listFallback.products.filter((p) => {
+					const title = (p.title || p.handle || '').toLowerCase();
+					const productType = (p.product_type || '').toLowerCase();
+					const variantTitles = (p.variants || []).map((v) => (v.title || '').toLowerCase());
+					const variantSkus = (p.variants || []).map((v) => (v.sku || '').toLowerCase());
+					return lowerTokens.some(
+						(t) =>
+							title.includes(t) ||
+							productType.includes(t) ||
+							variantTitles.some((vt) => vt.includes(t)) ||
+							variantSkus.some((vs) => vs.includes(t))
+					);
+				});
 			}
 		}
 
-		const products = data.products.map((product) => ({
+		const mappedProducts = products.map((product) => ({
 			id: product.id,
 			title: product.title,
 			handle: product.handle,
@@ -749,8 +786,8 @@ class ShopifyMCPServer {
 				{
 					type: 'text',
 					text:
-						`Found ${products.length} products matching "${args.query}":\n\n` +
-						products
+						`Found ${mappedProducts.length} products matching "${args.query}":\n\n` +
+						mappedProducts
 							.map(
 								(product) =>
 									`• ${product.title} (Product ID: ${product.id})\n` +
@@ -768,7 +805,7 @@ class ShopifyMCPServer {
 							.join('\n\n'),
 				},
 			],
-			structuredContent: { products },
+			structuredContent: { products: mappedProducts },
 		};
 	}
 
