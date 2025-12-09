@@ -2134,6 +2134,18 @@ function App() {
         setStatus('Ready');
         setOrdersError('');
       }
+      // Persist the latest search results so refreshes show the newest data.
+      if (window.electronAPI?.ordersCacheSave) {
+        const label =
+          (typeof lastQueryLabel === 'string' && lastQueryLabel.trim()) ||
+          (typeof nlQuery === 'string' && nlQuery.trim()) ||
+          'Latest orders';
+        await window.electronAPI.ordersCacheSave({
+          label,
+          search_query: requestPayload?.search_query || nlQuery || '',
+          orders: Array.isArray(loaded) ? loaded : []
+        });
+      }
 
     } catch (error) {
       setOrdersError(error.message || 'Failed to fetch orders');
