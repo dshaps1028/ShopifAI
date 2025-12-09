@@ -62,7 +62,7 @@ The full tool catalog (including customer and analytics helpers) is documented i
 The Electron app connects to this MCP server over stdio by default.
 
 ### Local Enhancements
-- Added a `create_order` tool to generate Shopify orders directly from Claude, complementing the existing order management commands.
+- Added a `create_order` tool to generate Shopify orders directly from Codex, complementing the existing order management commands.
 - Added an `update_order` tool to edit tags, notes, and contact fields for existing orders (used by the bulk/single edit flows).
 - Expanded `list_orders` filtering to support status, fulfillment state, created-at bounds, email, order ID, order number/name, and customer name.
 
