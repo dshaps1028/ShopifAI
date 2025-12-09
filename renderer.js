@@ -2605,6 +2605,55 @@ function App() {
           if (first.quantity) setCreateQuantity(first.quantity);
         }
       }
+      // Proactively prompt for missing required fields to keep the conversation moving.
+      const draftSku = (data.line_items?.[0]?.sku || createSku || '').trim();
+      const draftVariant = data.line_items?.[0]?.variant_id || createVariantId;
+      const draftQty =
+        (data.line_items?.[0]?.quantity ?? createQuantity ?? null) !== null
+          ? Number(data.line_items?.[0]?.quantity ?? createQuantity)
+          : null;
+      const draftEmail = (data.email || createEmail || '').trim();
+      const draftShip = nextShipping || shippingAddress || null;
+      const missingFields = [];
+      if (!draftSku && !draftVariant) {
+        missingFields.push('a SKU or variant ID for at least one line item');
+      }
+      if (!draftQty || Number.isNaN(draftQty) || draftQty <= 0) {
+        missingFields.push('a quantity (default 1 if not specified)');
+      }
+      if (!draftEmail) {
+        missingFields.push('a customer email');
+      }
+      if (!draftShip || !draftShip.address1 || !draftShip.city || !draftShip.province || !draftShip.zip || !draftShip.country) {
+        missingFields.push('a shipping address (name, address1, city, province/state, zip, country, phone)');
+      }
+      if (missingFields.length && data.action !== 'submit') {
+        const promptLine = `I still need ${missingFields.join(', ')} before I can submit. Please provide these details.`;
+        combinedReply = combinedReply ? `${combinedReply}\n\n${promptLine}` : promptLine;
+      } else if (!missingFields.length && data.action !== 'submit') {
+        const computedLineItems =
+          draftSku || draftVariant
+            ? [
+                {
+                  sku: draftSku || undefined,
+                  variant_id: draftVariant ? Number(draftVariant) : undefined,
+                  quantity: draftQty && !Number.isNaN(draftQty) ? draftQty : 1
+                }
+              ]
+            : [];
+        const computedDraft = {
+          line_items: computedLineItems,
+          note: schedulerQuery.trim() || undefined,
+          email: draftEmail || undefined,
+          shipping_address: draftShip || undefined,
+          billing_address: nextBilling || billingAddress || draftShip || undefined
+        };
+        setPendingDraft(computedDraft);
+        const summaryLine = `I have the draft ready: ${
+          draftSku || draftVariant ? `item ${draftSku || `variant ${draftVariant}`} x ${computedLineItems[0]?.quantity || 1}` : 'no items yet'
+        }, email ${draftEmail || 'missing'}, shipping ${draftShip ? 'provided' : 'missing'}. Should I submit this order to Shopify or would you like to edit anything? Say "confirm" to submit.`;
+        combinedReply = combinedReply ? `${combinedReply}\n\n${summaryLine}` : summaryLine;
+      }
       if (!combinedReply) {
         combinedReply = JSON.stringify(data, null, 2);
       }

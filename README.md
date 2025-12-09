@@ -101,7 +101,7 @@ The order search bar accepts natural language date phrases: explicit dates (`202
 
 ## AI Flows (Function Calling)
 - Order search: NL queries route through OpenAI function calling (`list_orders` / `search_products`), which invokes our local MCP server tools over stdio. The model is free to call `search_products` when a product name is present; results are used to filter orders by SKU.
-- Order creation chat: Uses the `draft_order_intent` function to drive product search (`search` action), draft updates, and submit confirmation. Product search in this flow benefits from the improved contains-style matching and local fallback described above.
+- Order creation chat: Uses the `draft_order_intent` function to drive product search (`search` action), draft updates, and submit confirmation. The assistant keeps asking for missing required details (SKU/variant, quantity, email, shipping address) and, once everything is present, summarizes the draft and prompts you to confirm before submitting to Shopify. Product search in this flow benefits from the improved contains-style matching and local fallback described above.
 
 ## Product Search Resilience
 - Contains-style token search via Shopify `products/search.json` (`title:*token*` with OR across tokens, after stripping filler words like “name/containing/with”).
