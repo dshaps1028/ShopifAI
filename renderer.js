@@ -1994,10 +1994,31 @@ function App() {
         setAutomationInput('');
       };
 
+      const appendLog = (saved) => {
+        const entry = {
+          time: saved?.created_at ? new Date(saved.created_at) : new Date(),
+          count: saved?.orders_snapshot
+            ? Array.isArray(saved.orders_snapshot)
+              ? saved.orders_snapshot.length
+              : automationPayload.orders_snapshot?.length || 0
+            : automationPayload.orders_snapshot?.length || 0,
+          label: saved?.label || label,
+          details: saved?.details || detailText,
+          ordersSnapshot: saved?.orders_snapshot || automationPayload.orders_snapshot || [],
+          next_run: saved?.next_run || automationPayload.next_run,
+          last_run: saved?.last_run || automationPayload.last_run,
+          id: saved?.id || Date.now()
+        };
+        setLogs((prev) => [...prev, entry]);
+      };
+
       if (window.electronAPI?.automationsSave) {
         window.electronAPI
           .automationsSave(automationPayload)
-          .then(() => finish())
+          .then((saved) => {
+            appendLog(saved);
+            finish();
+          })
           .catch((error) => {
             console.error('Failed to persist automation', error);
             setAutomationMessages((prev) => [
@@ -2011,21 +2032,9 @@ function App() {
             setAutomationInput('');
           });
       } else {
+        appendLog(null);
         finish();
       }
-
-      setLogs((prev) => [
-        ...prev,
-        {
-          time: new Date(),
-          count: automationPayload.orders_snapshot ? automationPayload.orders_snapshot.length : 0,
-          label,
-          details: detailText,
-          ordersSnapshot: automationPayload.orders_snapshot || [],
-          next_run: automationPayload.next_run,
-          last_run: automationPayload.last_run
-        }
-      ]);
     };
 
     run();
