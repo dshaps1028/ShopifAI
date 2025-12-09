@@ -2444,6 +2444,22 @@ function App() {
     setShowScheduleModal(true);
   };
 
+  const handleSelectOrder = async (order) => {
+    if (!order) return;
+    let enriched = order;
+    if (order.id && window.electronAPI?.mcpGetOrder) {
+      try {
+        const res = await window.electronAPI.mcpGetOrder({ order_id: order.id });
+        if (res?.ok && res.order) {
+          enriched = res.order;
+        }
+      } catch (err) {
+        console.warn('[orders] hydrate order failed', err);
+      }
+    }
+    setSelectedOrder(enriched);
+  };
+
   const handleDeleteAutomation = async (id) => {
     if (!id) return;
     // Optimistically drop from local list for responsiveness.
@@ -2688,6 +2704,8 @@ function App() {
     if (limitMatch) {
       limit = Number(limitMatch[1]) || null;
     }
+    const wantsSingleMax =
+      lc.includes('highest') || lc.includes('most expensive') || lc.includes('max') || lc.includes('highest cost');
     let sortKey = null;
     let sortDir = 'desc';
     if (lc.includes('created_at') || lc.includes('date')) {
@@ -2695,7 +2713,7 @@ function App() {
       if (lc.includes('asc') || lc.includes('oldest') || lc.includes('earliest')) {
         sortDir = 'asc';
       }
-    } else if (lc.includes('price') || lc.includes('total')) {
+    } else if (lc.includes('price') || lc.includes('total') || lc.includes('cost')) {
       sortKey = 'total_price';
       if (lc.includes('cheapest') || lc.includes('lowest') || lc.includes('asc')) {
         sortDir = 'asc';
@@ -2724,6 +2742,10 @@ function App() {
           const pb = parseFloat(b.total_price) || 0;
           return sortDir === 'asc' ? pa - pb : pb - pa;
         });
+    }
+
+    if (wantsSingleMax && sortKey === 'total_price' && !limit) {
+      limit = 1;
     }
 
     if (limit && limit > 0) {
@@ -2878,10 +2900,21 @@ function App() {
         throw new Error(result?.error || 'Failed to create order');
       }
       console.log('[orders] create_order result:', result);
-      if (result.order) {
-        const { id, name, total_price, currency } = result.order;
+      let canonicalOrder = result.order;
+      if (result.order?.id && window.electronAPI?.mcpGetOrder) {
+        const refresh = await window.electronAPI.mcpGetOrder({ order_id: result.order.id });
+        if (refresh?.ok && refresh.order) {
+          canonicalOrder = refresh.order;
+          console.log('[orders] hydrated order from get_order');
+        } else {
+          console.warn('[orders] get_order fallback used; could not hydrate order');
+        }
+      }
+
+      if (canonicalOrder) {
+        const { id, name, total_price, currency } = canonicalOrder;
         setCreatedOrders((prev) => {
-          const next = [result.order, ...prev];
+          const next = [canonicalOrder, ...prev];
           // Persist latest created orders snapshot
           if (window.electronAPI?.ordersCreatedSave) {
             window.electronAPI.ordersCreatedSave({
@@ -2891,7 +2924,7 @@ function App() {
           }
           return next;
         });
-        setSelectedOrder(result.order);
+        setSelectedOrder(canonicalOrder);
         setChatMessages((prev) => [
           ...prev,
           {
@@ -3718,7 +3751,7 @@ function App() {
             ? h(
                 Panel,
                 { title: 'RECENTLY CREATED ORDERS', description: 'Orders you just created' },
-                h(CreatedOrdersCarousel, { orders: createdOrders, onSelect: setSelectedOrder })
+                h(CreatedOrdersCarousel, { orders: createdOrders, onSelect: handleSelectOrder })
               )
             : null,
       selectedOrder
@@ -3997,7 +4030,7 @@ function App() {
         loading: ordersLoading,
         error: ordersError,
         queried: hasQueriedOrders,
-        onSelect: setSelectedOrder,
+        onSelect: handleSelectOrder,
         onShowAll: handleShowAllOrders
       })
     )
