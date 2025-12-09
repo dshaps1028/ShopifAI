@@ -86,6 +86,7 @@ const codexOrders = async (prompt) => {
   }
 
   try {
+    console.log('[codex] orders prompt:', prompt);
     const thread = await getCodexThread();
     const schema = {
       type: 'object',
@@ -135,9 +136,46 @@ const codexOrders = async (prompt) => {
       { outputSchema: schema }
     );
 
+    console.log('[codex] orders response:', turn?.finalResponse);
     return { ok: true, data: turn.finalResponse };
   } catch (error) {
     return { ok: false, error: error?.message || 'Codex request failed' };
+  }
+};
+
+const codexAnalyzeOrders = async (prompt, orders = []) => {
+  if (codexInitError) {
+    return { ok: false, error: codexInitError };
+  }
+  try {
+    console.log('[codex] analyze prompt:', prompt);
+    console.log('[codex] analyze payload (redacted):', JSON.stringify(orders, null, 2));
+    const thread = await getCodexThread();
+    const schema = {
+      type: 'object',
+      properties: {
+        analysis: { type: 'string' }
+      },
+      required: ['analysis'],
+      additionalProperties: false
+    };
+    const turn = await thread.run(
+      [
+        {
+          type: 'text',
+          text:
+            'You are an analyst for Shopify orders. Given a user request and a redacted list of orders (id, name, totals, status, tags, line items titles/SKUs/quantities), produce a concise summary of what matches the request. ' +
+            'Return 3-5 short bullet points or sentences. If nothing matches, say so. Do not include PII. Keep it under 800 characters.'
+        },
+        { type: 'text', text: `User request: ${prompt}` },
+        { type: 'text', text: `Orders JSON:\n${JSON.stringify(orders)}` }
+      ],
+      { outputSchema: schema }
+    );
+    console.log('[codex] analyze response:', turn?.finalResponse);
+    return { ok: true, analysis: turn.finalResponse.analysis || turn.finalResponse };
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Codex analysis failed' };
   }
 };
 
@@ -479,6 +517,7 @@ const listCreatedOrders = (limit = 1) => ipcRenderer.invoke('ordersCreated:list'
 const api = {
   ping: () => 'ready',
   codexOrders,
+  codexAnalyzeOrders,
   codexOrderComposer,
   oauthStart: (shop) => ipcRenderer.invoke('oauth:start', shop),
   oauthList: () => ipcRenderer.invoke('oauth:list'),

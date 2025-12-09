@@ -1117,10 +1117,8 @@ const deriveDateRangeFromQuery = (query, existingMin, existingMax) => {
         monthToken === 'sep' && monthOnlyMatch[1].toLowerCase().startsWith('sept') ? 'sep' : monthToken
       );
     const now = new Date();
-    const year = monthOnlyMatch[2] ? Number(monthOnlyMatch[2]) : now.getFullYear();
+    const effectiveYear = monthOnlyMatch[2] ? Number(monthOnlyMatch[2]) : now.getFullYear();
     if (monthIndex !== -1) {
-      const effectiveYear =
-        !monthOnlyMatch[2] && monthIndex > now.getMonth() ? now.getFullYear() - 1 : year;
       rangeStart = new Date(effectiveYear, monthIndex, 1, 0, 0, 0, 0);
       rangeEnd = new Date(effectiveYear, monthIndex + 1, 0, 23, 59, 59, 999);
     }
@@ -1239,6 +1237,9 @@ function App() {
   const [shopDomainInput, setShopDomainInput] = useState('');
   const [shopTokenInput, setShopTokenInput] = useState('');
   const [showConnectModal, setShowConnectModal] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState('');
+  const [aiAnalysisLoading, setAiAnalysisLoading] = useState(false);
+  const [aiAnalysisError, setAiAnalysisError] = useState('');
   const messagesEndRef = useRef(null);
   const editMessagesEndRef = useRef(null);
   const automationMessagesEndRef = useRef(null);
@@ -1582,6 +1583,9 @@ function App() {
     setOrdersError('');
     setStatus('Fetching orders…');
     setSelectedOrder(null);
+    setAiAnalysis('');
+    setAiAnalysisError('');
+    setAiAnalysisLoading(false);
 
     try {
       if (!window.electronAPI?.mcpListOrders) {
@@ -1606,12 +1610,32 @@ function App() {
         throw new Error(result?.error || 'MCP call failed');
       }
 
+      const hadDateFilter = !!(requestPayload.created_at_min || requestPayload.created_at_max);
       let loaded = result.orders || [];
       console.log('[orders] list_orders result count:', Array.isArray(loaded) ? loaded.length : 0);
       if (Array.isArray(loaded)) {
         loaded.forEach((order, idx) => {
           console.log(`[orders] result[${idx}]:`, JSON.stringify(order, null, 2));
         });
+      }
+
+      // Fallback: if a date filter returned nothing, retry without dates to avoid over-restricting
+      if (hadDateFilter && Array.isArray(loaded) && loaded.length === 0) {
+        const fallbackPayload = { ...requestPayload };
+        delete fallbackPayload.created_at_min;
+        delete fallbackPayload.created_at_max;
+        console.log(
+          '[orders] date-filtered query returned 0 results, retrying without date range:',
+          JSON.stringify(fallbackPayload, null, 2)
+        );
+        const retry = await window.electronAPI.mcpListOrders(fallbackPayload);
+        if (retry?.ok && Array.isArray(retry.orders)) {
+          loaded = retry.orders;
+          console.log(
+            '[orders] fallback result count:',
+            Array.isArray(loaded) ? loaded.length : 0
+          );
+        }
       }
 
       // If we queried by name/order_number, avoid client-side filters that could strip it
@@ -1669,7 +1693,9 @@ function App() {
       // Client-side order status filter
       if (queryParams.status) {
         const target = String(queryParams.status).toLowerCase();
-        loaded = loaded.filter((o) => o.status && String(o.status).toLowerCase() === target);
+        if (target !== 'any') {
+          loaded = loaded.filter((o) => o.status && String(o.status).toLowerCase() === target);
+        }
       }
 
       if (queryParams.sku) {
@@ -1696,6 +1722,8 @@ function App() {
         });
       }
 
+      console.log('[orders] final count after client filters:', Array.isArray(loaded) ? loaded.length : 0);
+
       let finalOrders = loaded;
       if (window.electronAPI?.ordersCacheSave && window.electronAPI?.ordersCacheList) {
         try {
@@ -1718,6 +1746,7 @@ function App() {
       setOrders(finalOrders);
       setSelectedOrder(null);
       setStatus('Ready');
+
     } catch (error) {
       setOrdersError(error.message || 'Failed to fetch orders');
       setStatus('Error');
@@ -1731,6 +1760,85 @@ function App() {
     setSchedulerProcessing(false);
     setStatus('Ready');
     setShowScheduleModal(true);
+  };
+
+  const handleAnalyzeOrders = async () => {
+    if (!Array.isArray(orders) || !orders.length) {
+      setAiAnalysisError('Run a search first, then analyze.');
+      setAiAnalysis('');
+      return;
+    }
+    if (!window.electronAPI?.codexAnalyzeOrders) {
+      setAiAnalysisError('Codex analysis is not available in this build.');
+      return;
+    }
+    const userPrompt = lastQueryLabel || nlQuery || 'Order search';
+    setAiAnalysisLoading(true);
+    setAiAnalysisError('');
+    try {
+      const limited = orders.slice(0, 25).map((o) => ({
+        id: o.id,
+        name: o.name,
+        total_price: o.total_price,
+        currency: o.currency,
+        created_at: o.created_at,
+        tags: o.tags,
+        financial_status: o.financial_status,
+        fulfillment_status: o.fulfillment_status,
+        line_items: Array.isArray(o.line_items)
+          ? o.line_items.map((li) => ({
+              title: li.title,
+              variant_title: li.variant_title,
+              sku: li.sku,
+              quantity: li.quantity
+            }))
+          : []
+      }));
+      const promptText = `${userPrompt}\n\nPlease respond with a concise, conversational summary (2-4 sentences) of notable patterns or anomalies. Avoid bullet points; use plain English.`;
+      console.log('[ai-search] sending to Codex (redacted):', JSON.stringify(limited, null, 2));
+      const res = await window.electronAPI.codexAnalyzeOrders(promptText, limited);
+      if (res?.ok) {
+        console.log('[ai-search] Codex analysis response:', res.analysis);
+        const cleanAnalysisText = (text) => {
+          if (!text) return '';
+          if (typeof text === 'string') {
+            const trimmed = text.trim();
+            try {
+              const parsed = JSON.parse(trimmed);
+              if (parsed && typeof parsed.analysis === 'string') {
+                return parsed.analysis;
+              }
+            } catch (e) {
+              // not JSON, proceed
+            }
+            if (
+              (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+              (trimmed.startsWith("'") && trimmed.endsWith("'"))
+            ) {
+              return trimmed.slice(1, -1);
+            }
+            return trimmed;
+          }
+          if (text && typeof text.analysis === 'string') {
+            return text.analysis;
+          }
+          return String(text);
+        };
+        const sanitized = cleanAnalysisText(res.analysis);
+        setAiAnalysis(sanitized);
+        setAiAnalysisError('');
+      } else {
+        console.error('[ai-search] Codex analysis error:', res);
+        setAiAnalysis('');
+        setAiAnalysisError(res?.error || 'AI analysis failed');
+      }
+    } catch (err) {
+      console.error('[orders] AI analysis failed:', err);
+      setAiAnalysis('');
+      setAiAnalysisError(err?.message || 'AI analysis failed');
+    } finally {
+      setAiAnalysisLoading(false);
+    }
   };
 
   const handleCreateOrder = async (draftOverride) => {
@@ -1842,6 +1950,41 @@ function App() {
     } finally {
       setSchedulerProcessing(false);
     }
+  };
+
+  const renderAiAnalysisContent = () => {
+    if (!aiAnalysis) return null;
+    const lines = aiAnalysis
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const allBullets = lines.every((l) => l.startsWith('- '));
+
+    const containerStyle = {
+      background: 'rgba(255,255,255,0.06)',
+      border: '1px solid rgba(255,255,255,0.1)',
+      borderRadius: '10px',
+      padding: '12px',
+      color: '#fff',
+      fontSize: '13px',
+      lineHeight: '1.6'
+    };
+
+    if (allBullets) {
+      return h(
+        'div',
+        { style: containerStyle },
+        h(
+          'ul',
+          { style: { paddingLeft: '18px', margin: 0 } },
+          lines.map((l, idx) =>
+            h('li', { key: `ai-line-${idx}` }, l.replace(/^- /, '').trim())
+          )
+        )
+      );
+    }
+
+    return h('div', { style: { ...containerStyle, whiteSpace: 'pre-wrap' } }, aiAnalysis);
   };
 
   const handleProductSearch = async (overrideQuery) => {
@@ -2257,6 +2400,7 @@ function App() {
         derivedSku = null;
       }
 
+      // Heuristic: extract a line-item title fragment (inexact match)
       const { created_at_min, created_at_max } = deriveDateRangeFromQuery(
         nlQuery,
         params.created_at_min,
@@ -2279,24 +2423,24 @@ function App() {
       // Strip undefined/null/empty-string fields before sending
       const cleanedPayload = Object.fromEntries(
         Object.entries(requestPayload).filter(
-          ([, value]) => value !== undefined && value !== null && value !== ''
-        )
-      );
+        ([, value]) => value !== undefined && value !== null && value !== ''
+      )
+    );
 
       if (derivedLimit !== undefined && derivedLimit !== null) {
         cleanedPayload.limit = derivedLimit;
       }
-      if (normalizedStatus) requestPayload.status = normalizedStatus;
-      if (normalizedFinancialStatus) requestPayload.financial_status = normalizedFinancialStatus;
+      const effectiveStatus = normalizedStatus || 'any';
+      if (effectiveStatus) cleanedPayload.status = effectiveStatus;
+      if (normalizedFinancialStatus) cleanedPayload.financial_status = normalizedFinancialStatus;
       // For exact order lookups, avoid over-filtering with status/date constraints
       if (derivedOrderNumber || derivedOrderId) {
-        delete requestPayload.status;
-        delete requestPayload.financial_status;
-        delete requestPayload.fulfillment_status;
-        delete requestPayload.created_at_min;
-        delete requestPayload.created_at_max;
         cleanedPayload.status = 'any';
         cleanedPayload.limit = 250;
+        delete cleanedPayload.financial_status;
+        delete cleanedPayload.fulfillment_status;
+        delete cleanedPayload.created_at_min;
+        delete cleanedPayload.created_at_max;
       }
 
       await handleFetchOrders(cleanedPayload);
@@ -2671,72 +2815,93 @@ function App() {
             )
           )
         : null,
-          h(
+      h(
+        Panel,
+        {
+          title: 'SEARCH FOR ORDERS',
+          description: 'Make edits, diagnose issues, and generate reports using plain english'
+        },
+        h(
+          'div',
+        {
+          style: {
+            display: 'flex',
+            gap: '10px',
+            alignItems: 'center',
+            marginBottom: '12px',
+            flexWrap: 'wrap'
+          }
+        },
+        h('input', {
+          type: 'text',
+          placeholder: '"show 3 pending orders from yesterday"',
+          value: nlQuery,
+          onChange: (event) => setNlQuery(event.target.value),
+          style: { flex: '1 1 240px' }
+        }),
+        h(
+          ActionButton,
+          {
+            onClick: handleCodexOrders,
+            disabled: nlProcessing || ordersLoading || !nlQuery.trim()
+          },
+          nlProcessing ? 'Working…' : 'Search Shopify'
+        )
+        )
+      ),
+      aiAnalysisLoading || aiAnalysis || aiAnalysisError
+        ? h(
             Panel,
+            { title: 'AI Insights', description: 'Redacted summary from Codex' },
+            aiAnalysisLoading
+              ? h('p', { className: 'order-sub' }, 'Analyzing results…')
+              : aiAnalysisError
+                ? h('p', { className: 'order-sub' }, aiAnalysisError)
+                : renderAiAnalysisContent()
+          )
+        : null,
+      hasQueriedOrders && orders.length > 0 && !ordersLoading && !nlProcessing
+        ? h(
+            'div',
             {
-              title: 'SEARCH FOR ORDERS',
-              description: 'Make edits, diagnose issues, and generate reports using plain english'
+              style: {
+                display: 'flex',
+                justifyContent: 'flex-start',
+                marginBottom: '12px',
+                gap: '8px',
+                flexWrap: 'wrap'
+              }
             },
             h(
-              'div',
+              ActionButton,
               {
-                style: {
-                  display: 'flex',
-                  gap: '10px',
-                  alignItems: 'center',
-                  marginBottom: '12px',
-                  flexWrap: 'wrap'
+                onClick: () => {
+                  setEditTargets(orders);
+                  setShowEditModal(true);
                 }
               },
-              h('input', {
-                type: 'text',
-                placeholder: '"show 3 pending orders from yesterday"',
-                value: nlQuery,
-                onChange: (event) => setNlQuery(event.target.value),
-                style: { flex: '1 1 240px' }
-              }),
-              h(
-                ActionButton,
-                {
-                  onClick: handleCodexOrders,
-                  disabled: nlProcessing || ordersLoading || !nlQuery.trim()
-                },
-                nlProcessing ? 'Working…' : 'Search Shopify'
-              )
+              orders.length === 1 ? 'Edit Order' : 'Edit Orders'
+            ),
+            h(
+              ActionButton,
+              {
+                onClick: handleAnalyzeOrders,
+                disabled: aiAnalysisLoading
+              },
+              aiAnalysisLoading ? 'Analyzing…' : 'Analyze with AI'
             )
-          ),
-          hasQueriedOrders && orders.length > 0 && !ordersLoading && !nlProcessing
-            ? h(
-                'div',
-                {
-                  style: {
-                    display: 'flex',
-                    justifyContent: 'flex-start',
-                    marginBottom: '12px'
-                  }
-                },
-                h(
-                  ActionButton,
-                  {
-                    onClick: () => {
-                      setEditTargets(orders);
-                      setShowEditModal(true);
-                    }
-                  },
-                  orders.length === 1 ? 'Edit Order' : 'Edit Orders'
-                )
-              )
-            : null,
-          h(OrdersList, {
-            orders,
-            loading: ordersLoading,
-            error: ordersError,
-            queried: hasQueriedOrders,
-            onSelect: setSelectedOrder
-          })
-        )
-      )
+          )
+        : null,
+      h(OrdersList, {
+        orders,
+        loading: ordersLoading,
+        error: ordersError,
+        queried: hasQueriedOrders,
+        onSelect: setSelectedOrder
+      })
     )
+  )
+)
   );
 }
 
