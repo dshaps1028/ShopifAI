@@ -1928,75 +1928,107 @@ function App() {
     const trimmed = text.trim();
     setAutomationMessages((prev) => [...prev, { role: 'user', text: trimmed }]);
     setAutomationProcessing(true);
-    const { intervalDays, startAt, nextRun, endAt } = parseAutomationSchedule(trimmed);
-    const searchLabel = lastQueryLabel || 'Last search';
-    const editLabel = lastEditDescription || 'Edit action';
-    const label = `${searchLabel} • ${editLabel}`;
-    const scheduleString = `every ${intervalDays} day(s)${
-      endAt ? ` until ${endAt.toISOString().slice(0, 10)}` : ''
-    }`;
-    const detailText = `Schedule: ${scheduleString}\nSearch: ${searchLabel}\nAction: ${editLabel}`;
 
-    const automationPayload = {
-      label,
-      schedule: scheduleString,
-      action: editLabel,
-      search_query: searchLabel,
-      orders_snapshot: editTargets.length ? editTargets : orders,
-      last_run: startAt.toISOString(),
-      next_run: nextRun.toISOString(),
-      start_at: startAt.toISOString(),
-      end_at: endAt ? endAt.toISOString() : null,
-      enabled: true,
-      interval_days: intervalDays
-    };
+    const run = async () => {
+      const searchLabel = lastQueryLabel || 'Last search';
+      const editLabel = lastEditDescription || 'Edit action';
+      let parsed = null;
+      if (window.electronAPI?.codexAutomation) {
+        try {
+          const codex = await window.electronAPI.codexAutomation(trimmed, {
+            search_label: searchLabel,
+            action_label: editLabel
+          });
+          if (codex?.ok && codex.data) {
+            parsed = codex.data;
+          }
+        } catch (err) {
+          console.error('[automation] codex automation parse failed:', err);
+        }
+      }
 
-    const successMessage = `Got it. I saved this automation: ${scheduleString}. Next run: ${nextRun.toLocaleString()}.`;
+      const { intervalDays, startAt, nextRun, endAt } = parsed
+        ? (() => {
+            const now = new Date();
+            const iv = parsed.interval_days && parsed.interval_days > 0 ? parsed.interval_days : 1;
+            const start = parsed.start_at ? new Date(parsed.start_at) : now;
+            const end = parsed.end_at ? new Date(parsed.end_at) : null;
+            const next = new Date(start.getTime() + iv * 24 * 60 * 60 * 1000);
+            return { intervalDays: iv, startAt: start, nextRun: next, endAt: end };
+          })()
+        : parseAutomationSchedule(trimmed);
 
-    const finish = () => {
-      setAutomationMessages((prev) => [
+      const label = parsed?.label || `${searchLabel} • ${editLabel}`;
+      const scheduleString =
+        parsed?.schedule ||
+        `every ${intervalDays} day(s)${endAt ? ` until ${endAt.toISOString().slice(0, 10)}` : ''}`;
+      const detailText = `Schedule: ${scheduleString}\nSearch: ${parsed?.search_query || searchLabel}\nAction: ${
+        parsed?.action || editLabel
+      }`;
+
+      const automationPayload = {
+        label,
+        schedule: scheduleString,
+        action: parsed?.action || editLabel,
+        search_query: parsed?.search_query || searchLabel,
+        orders_snapshot: editTargets.length ? editTargets : orders,
+        last_run: startAt.toISOString(),
+        next_run: nextRun.toISOString(),
+        start_at: startAt.toISOString(),
+        end_at: endAt ? endAt.toISOString() : null,
+        enabled: true,
+        interval_days: intervalDays
+      };
+
+      const successMessage = `Got it. I saved this automation: ${scheduleString}. Next run: ${nextRun.toLocaleString()}.`;
+
+      const finish = () => {
+        setAutomationMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            text: successMessage
+          }
+        ]);
+        setAutomationProcessing(false);
+        setAutomationInput('');
+      };
+
+      if (window.electronAPI?.automationsSave) {
+        window.electronAPI
+          .automationsSave(automationPayload)
+          .then(() => finish())
+          .catch((error) => {
+            console.error('Failed to persist automation', error);
+            setAutomationMessages((prev) => [
+              ...prev,
+              {
+                role: 'assistant',
+                text: `I tried to save the automation but hit an error: ${error?.message || 'unknown error'}.`
+              }
+            ]);
+            setAutomationProcessing(false);
+            setAutomationInput('');
+          });
+      } else {
+        finish();
+      }
+
+      setLogs((prev) => [
         ...prev,
         {
-          role: 'assistant',
-          text: successMessage
+          time: new Date(),
+          count: automationPayload.orders_snapshot ? automationPayload.orders_snapshot.length : 0,
+          label,
+          details: detailText,
+          ordersSnapshot: automationPayload.orders_snapshot || [],
+          next_run: automationPayload.next_run,
+          last_run: automationPayload.last_run
         }
       ]);
-      setAutomationProcessing(false);
-      setAutomationInput('');
     };
 
-    if (window.electronAPI?.automationsSave) {
-      window.electronAPI
-        .automationsSave(automationPayload)
-        .then(() => finish())
-        .catch((error) => {
-          console.error('Failed to persist automation', error);
-          setAutomationMessages((prev) => [
-            ...prev,
-            {
-              role: 'assistant',
-              text: `I tried to save the automation but hit an error: ${error?.message || 'unknown error'}.`
-            }
-          ]);
-          setAutomationProcessing(false);
-          setAutomationInput('');
-        });
-    } else {
-      finish();
-    }
-
-    setLogs((prev) => [
-      ...prev,
-      {
-        time: new Date(),
-        count: automationPayload.orders_snapshot ? automationPayload.orders_snapshot.length : 0,
-        label,
-        details: detailText,
-        ordersSnapshot: automationPayload.orders_snapshot || [],
-        next_run: automationPayload.next_run,
-        last_run: automationPayload.last_run
-      }
-    ]);
+    run();
   };
 
   // Background automation runner (triggered from main via IPC)
