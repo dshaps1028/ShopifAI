@@ -25,9 +25,11 @@ Basic Electron application scaffold for the Merchant Workbench desktop app.
    SHOPIFY_DOMAIN=your-shop.myshopify.com
    PORT=3000
    ```
-   (This is optional as you can also add Shopify credentials within the UI login window
-3. Keep this file out of version control; it is already ignored by Git.
-4. Optionally create `.env.local` in the repo root for AI keys (ignored by Git). Example:
+   (The PORT will need to be set in a `.env` file, but Shopify credentials can also be added within the UI login window)
+
+2. Keep this file out of version control; it is already ignored by Git.
+
+3. Optionally create `.env.local` in the repo root for AI keys (ignored by Git). Example:
    ```bash
    CODEX_API_KEY=your_codex_key
    OPENAI_API_KEY=your_openai_key
